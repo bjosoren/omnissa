@@ -32,7 +32,7 @@
     Author  : Bjørn Sørensen
     Version : 2603 (v4.21.0_10042026)
     Blog    : https://tech.iot-it.no
-    GitHub  : https://github.com/<your-repo>
+    GitHub  : https://github.com/bjosoren/omnissa/blob/main/upgrades/appvolumes/2603/Upgrade-AppVolumesManager-2603.ps1
 
     Run this script once per AVM node. In a multi-node environment,
     follow Omnissa rolling upgrade guidelines before proceeding to the next node:
