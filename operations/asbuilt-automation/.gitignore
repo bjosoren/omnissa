@@ -1,0 +1,12 @@
+# Runtime config files contain encrypted credentials and environment-specific paths
+scripts/Config/*.json
+Config/*.json
+
+# Report output
+*.html
+*.docx
+*.txt
+
+# PowerShell
+*.pssproj
+.vs/
