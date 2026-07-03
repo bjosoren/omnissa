@@ -52,7 +52,8 @@ Automates the upgrade of **Omnissa App Volumes Manager** to version **2603 (v4.2
   $cred | Export-CliXml -Path "C:\Credentials\appvol_admin_${env:USERNAME}_${env:COMPUTERNAME}.xml"
   ```
 
-- App Volumes Manager **2603 ISO** accessible on a local or mapped drive
+- App Volumes Manager **2603 ISO** copied to `C:\Install\` on the management host
+  (must be on a local drive — ISO mounting from network/mapped drives is unreliable)
 
 ### App Volumes Manager server
 
@@ -74,8 +75,8 @@ All environment-specific values are collected at the top of the script under the
 | `$vCenterServer` | FQDN of your vCenter server |
 | `$vCenterCredFile` | Path to the VICredentialStore XML file |
 | `$avmHostname` | FQDN of the App Volumes Manager VM |
-| `$avmCredFile` | Path to the AVM admin CliXml credential file |
-| `$avmIsoPath` | Full path to the App Volumes 2603 ISO |
+| `$avmCredFile` | Path to the AVM admin CliXml credential file — default: `C:\Credentials\appvol_admin.xml` |
+| `$avmIsoPath` | Full local path to the App Volumes 2603 ISO — must be on `C:`, not a mapped drive |
 | `$snapshotName` | Name for the pre-upgrade snapshot |
 | `$installDir` | Temp directory on the AVM for MSI and backups |
 | `$transcriptDir` | Directory on the management host for transcript logs |

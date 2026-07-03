@@ -25,8 +25,9 @@
         New-VICredentialStoreItem -User <user> -Password <pass> -Host <vcenter fqdn> -File <path>.xml
     - App Volumes admin credentials stored with Export-CliXml:
         $cred = Get-Credential
-        $cred | Export-CliXml -Path "<path>\appvol_admin_${env:USERNAME}_${env:COMPUTERNAME}.xml"
-    - App Volumes Manager 2603 ISO mounted or MSI accessible on a network share
+        $cred | Export-CliXml -Path "C:\Credentials\appvol_admin.xml"
+    - App Volumes Manager 2603 ISO copied to C:\Install\ on the management host
+      (ISO must be on a local drive — mounting from network/mapped drives is unreliable)
 
 .NOTES
     Author  : Bjørn Sørensen
@@ -44,13 +45,13 @@
 # ============================================================
 
 $vCenterServer       = "vcenter.yourdomain.com"
-$vCenterCredFile     = "C:\Credentials\vcenter_creds.xml"
+$vCenterCredFile     = "C:\Credentials\vcenter_creds.xml"  # Store on local C: drive, not a network share
 
 $avmHostname         = "avm01.yourdomain.com"    # Must match the VM name in vCenter (FQDN)
-$avmCredFile         = "C:\Credentials\appvol_admin_${env:USERNAME}_${env:COMPUTERNAME}.xml"
+$avmCredFile         = "C:\Credentials\appvol_admin.xml"
 
-$avmIsoPath          = "I:\Omnissa\AppVolumes\2603\Omnissa_App_Volumes_v4.21.0_10042026.ISO"
-$avmMsiName          = "App Volumes Manager.msi"   # MSI filename inside the ISO
+$avmIsoPath          = "C:\Install\Omnissa_App_Volumes_v4.21.0_10042026.ISO"  # Must be on local C: drive — ISO mounting does not work reliably from network/mapped drives
+$avmMsiName          = "Installation\Manager\App Volumes Manager.msi"   # Path to MSI inside the ISO
 
 $avmVendor           = "Omnissa"
 $avmProduct          = "App Volumes Manager"
@@ -58,12 +59,15 @@ $avmVersion          = "4.21.0_10042026"
 $avmExpectedVersion  = "4.21.0"           # Partial match — /app_volumes/version response must contain this string
 
 $snapshotName        = "Pre-Upgrade-AVM-2603"
-$installDir          = "C:\Install"
-$transcriptDir       = "C:\Logs\AppVolumes"  # Transcript is written here on the management host
+$installDir          = "C:\Install"             # Temp working directory on the AVM
+$transcriptDir       = "C:\Logs\AppVolumes"   # Must exist or will be created; kept on local C: drive
 
 # Nginx paths (these are typically static across AVM versions)
 $nginxConfDir        = "C:\Program Files (x86)\CloudVolumes\Manager\nginx\conf"
-$nginxFiles          = @("nginx.conf", "avm-cert.crt", "avm-cert-PEM.key")
+# nginx.conf is always backed up. Certificate files are discovered dynamically at runtime
+# since filenames vary between installations (e.g. avm-cert.crt, server.crt, custom names).
+# All .crt and .key files found in $nginxConfDir will be included automatically.
+$nginxStaticFiles    = @("nginx.conf")
 
 # How long (seconds) to wait between WinRM polling attempts after power-on / reboot
 $winrmPollInterval   = 15
@@ -135,7 +139,7 @@ function Invoke-AVMHealthCheck {
     param(
         [string]$ComputerName,
         [System.Management.Automation.PSCredential]$Credential,
-        [string]$ServiceName        = "svservice",
+        [string]$ServiceName        = "svmanager",
         [string]$ServiceDisplayName = "App Volumes Manager",
         [string]$ExpectedVersion    = "",          # e.g. "4.21.0" — leave empty to skip version check
         [int]$ApiTimeoutSeconds     = 120,
@@ -169,13 +173,11 @@ function Invoke-AVMHealthCheck {
     }
 
     # --------------------------------------------------------
-    # 2. API version check via /app_volumes/version
-    #    - No authentication required (confirmed in Omnissa docs)
-    #    - Returns version, configured status, and uptime as JSON
-    #    - Doubles as the web GUI availability check
+    # 2 & 3. Web checks — configure SSL trust first (applies to both endpoints)
     # --------------------------------------------------------
 
-    # Suppress SSL certificate errors for self-signed / internal certs
+    # Suppress SSL certificate errors for self-signed / internal certs.
+    # Must be set before any Invoke-WebRequest / Invoke-RestMethod calls.
     if (-not ([System.Management.Automation.PSTypeName]'TrustAllCerts').Type) {
         Add-Type @"
 using System.Net;
@@ -189,6 +191,48 @@ public class TrustAllCerts : ICertificatePolicy {
     }
     [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCerts
     [System.Net.ServicePointManager]::SecurityProtocol  = [System.Net.SecurityProtocolType]::Tls12
+
+    Write-Verbose "Health check timeout: ${ApiTimeoutSeconds}s / poll interval: ${ApiPollIntervalSeconds}s" -Verbose
+
+    # --------------------------------------------------------
+    # 2. Web GUI health check via /health_check
+    #    - Recommended App Volumes 4.x health check endpoint (also used by HAProxy)
+    #    - Returns HTTP 200 only when AVM is fully healthy (DB connected, services up)
+    #    - More reliable than just checking port 443 — a degraded AVM returns non-200
+    # --------------------------------------------------------
+
+    $healthCheckUrl = "https://$ComputerName/health_check"
+    $deadline       = (Get-Date).AddSeconds($ApiTimeoutSeconds)
+    $healthCheckOk  = $false
+
+    Write-Verbose "Polling $healthCheckUrl for up to ${ApiTimeoutSeconds}s..." -Verbose
+
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $hcResp = Invoke-WebRequest -Uri $healthCheckUrl -TimeoutSec 10 -UseBasicParsing -ErrorAction Stop
+            if ($hcResp.StatusCode -eq 200) {
+                Write-Verbose "[OK] /health_check returned HTTP 200 — AVM is healthy." -Verbose
+                $healthCheckOk = $true
+                break
+            } else {
+                Write-Verbose "  /health_check returned HTTP $($hcResp.StatusCode). Retrying in ${ApiPollIntervalSeconds}s..." -Verbose
+            }
+        } catch {
+            Write-Verbose "  /health_check not yet available ($($_.Exception.Message)). Retrying in ${ApiPollIntervalSeconds}s..." -Verbose
+        }
+        Start-Sleep -Seconds $ApiPollIntervalSeconds
+    }
+
+    if (-not $healthCheckOk) {
+        Write-Warning "[FAIL] /health_check at $healthCheckUrl did not return HTTP 200 within ${ApiTimeoutSeconds}s."
+        $healthy = $false
+    }
+
+    # --------------------------------------------------------
+    # 3. API version check via /app_volumes/version
+    #    - No authentication required (confirmed in Omnissa docs)
+    #    - Returns version, configured status, and uptime as JSON
+    # --------------------------------------------------------
 
     $versionUrl = "https://$ComputerName/app_volumes/version"
     $deadline   = (Get-Date).AddSeconds($ApiTimeoutSeconds)
@@ -367,33 +411,62 @@ try {
                               -Credential $avmCredential `
                               -Authentication CredSSP
 
+    # Step 1a: Create temp directory and back up Nginx files on the remote AVM
     Invoke-Command -Session $session -ScriptBlock {
-        param($installDir, $nginxConfDir, $nginxFiles, $avmMsiSource,
-              $avmVendor, $avmProduct, $avmVersion)
+        param($installDir, $nginxConfDir, $nginxFiles)
 
-        # Create temp install directory
         New-Item -Path $installDir -ItemType Directory -Force | Out-Null
         Write-Verbose "Created temp directory: $installDir" -Verbose
 
-        # Backup Nginx files
-        foreach ($file in $nginxFiles) {
+        # Back up static files (nginx.conf)
+        foreach ($file in $nginxStaticFiles) {
             $src = Join-Path $nginxConfDir $file
             if (Test-Path $src) {
                 Copy-Item -Path $src -Destination $installDir -Force
                 Write-Verbose "Backed up: $file" -Verbose
             } else {
-                Write-Warning "Nginx file not found, skipping backup: $src"
+                Write-Warning "Nginx static file not found, skipping: $src"
             }
         }
 
-        # Copy MSI locally (avoids installer issues over UNC during CredSSP double-hop)
-        $localMsi = Join-Path $installDir "App Volumes Manager.msi"
-        Write-Verbose "Copying MSI from $avmMsiSource..." -Verbose
-        Copy-Item -Path $avmMsiSource -Destination $localMsi -Force
+        # Dynamically discover and back up all certificate files (.crt, .key, .pem)
+        # Note: Get-ChildItem -Include requires -Recurse to match files in the target directory,
+        # so we use Where-Object on the extension instead for reliable filtering.
+        $certFiles = Get-ChildItem -Path $nginxConfDir -File -ErrorAction SilentlyContinue |
+                     Where-Object { $_.Extension -in ".crt", ".key", ".pem" }
+        if ($certFiles) {
+            foreach ($cert in $certFiles) {
+                Copy-Item -Path $cert.FullName -Destination $installDir -Force
+                Write-Verbose "Backed up cert file: $($cert.Name)" -Verbose
+            }
+        } else {
+            Write-Warning "No certificate files (.crt/.key/.pem) found in $nginxConfDir — skipping cert backup."
+        }
+    } -ArgumentList $installDir, $nginxConfDir, $nginxStaticFiles
 
-        # Run installer
-        $logFile = Join-Path $installDir "UpgradeAppVol_$avmVersion.log"
-        $msiArgs = "/qb /l* `"$logFile`""
+    # Step 1b: Copy MSI from ISO to a local temp folder on the management host first.
+    # Copy-Item -ToSession cannot read directly from a mounted ISO (CD-ROM filesystem
+    # does not support the required stream operations), so we stage it locally first.
+    $stagingMsi = Join-Path $env:TEMP "App Volumes Manager.msi"
+    Write-Verbose "Staging MSI locally: $avmMsiSource -> $stagingMsi ..." -Verbose
+    Copy-Item -Path $avmMsiSource -Destination $stagingMsi -Force
+
+    # Step 1c: Push staged MSI from management host temp folder to remote AVM
+    $remoteMsi = Join-Path $installDir "App Volumes Manager.msi"
+    Write-Verbose "Copying MSI to ${avmHostname}:$remoteMsi ..." -Verbose
+    Copy-Item -Path $stagingMsi -Destination $remoteMsi -ToSession $session -Force
+
+    # Clean up staging copy on management host
+    Remove-Item -Path $stagingMsi -Force -ErrorAction SilentlyContinue
+    Write-Verbose "Staging copy removed." -Verbose
+
+    # Step 1d: Run the installer on the remote AVM
+    Invoke-Command -Session $session -ScriptBlock {
+        param($installDir, $avmVendor, $avmProduct, $avmVersion)
+
+        $localMsi = Join-Path $installDir "App Volumes Manager.msi"
+        $logFile  = Join-Path $installDir "UpgradeAppVol_$avmVersion.log"
+        $msiArgs  = "/qb /l* `"$logFile`""
         Write-Verbose "Installing $avmVendor $avmProduct $avmVersion..." -Verbose
         $exitCode = (Start-Process -FilePath $localMsi -ArgumentList $msiArgs -Wait -PassThru).ExitCode
         if ($exitCode -ne 0) {
@@ -401,8 +474,7 @@ try {
         }
         Write-Verbose "Installation completed successfully (exit code: $exitCode)." -Verbose
 
-    } -ArgumentList $installDir, $nginxConfDir, $nginxFiles, $avmMsiSource,
-                    $avmVendor, $avmProduct, $avmVersion
+    } -ArgumentList $installDir, $avmVendor, $avmProduct, $avmVersion
 
     Remove-PSSession $session
 
@@ -435,17 +507,19 @@ try {
     Invoke-Command -Session $session -ScriptBlock {
         param($installDir, $nginxConfDir, $nginxFiles)
 
+        # Restore all files that were backed up to $installDir (nginx.conf + any certs)
         Write-Verbose "Restoring Nginx configuration files..." -Verbose
-        foreach ($file in $nginxFiles) {
-            $src = Join-Path $installDir $file
-            if (Test-Path $src) {
-                Copy-Item -Path $src -Destination $nginxConfDir -Force
-                Write-Verbose "Restored: $file" -Verbose
-            } else {
-                Write-Warning "Backup file not found, skipping restore: $src"
+        $backedUp = Get-ChildItem -Path $installDir -File -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Extension -in ".conf",".crt",".key",".pem" }
+        if ($backedUp) {
+            foreach ($file in $backedUp) {
+                Copy-Item -Path $file.FullName -Destination $nginxConfDir -Force
+                Write-Verbose "Restored: $($file.Name)" -Verbose
             }
+        } else {
+            Write-Warning "No nginx backup files found in $installDir to restore."
         }
-    } -ArgumentList $installDir, $nginxConfDir, $nginxFiles
+    } -ArgumentList $installDir, $nginxConfDir
 
     Remove-PSSession $session
 
