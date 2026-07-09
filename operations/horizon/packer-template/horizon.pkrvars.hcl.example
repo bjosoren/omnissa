@@ -1,0 +1,51 @@
+# =============================================================================
+# horizon.pkrvars.hcl.example
+# Copy this file to horizon.pkrvars.hcl and fill in your values.
+# horizon.pkrvars.hcl is in .gitignore - never commit credentials.
+# =============================================================================
+
+# -- vCenter connection -------------------------------------------------------
+vcenter_server              = "vcenter.yourdomain.com"
+vcenter_username            = "administrator@vsphere.local"
+vcenter_password            = "YourPassword"
+vcenter_insecure_connection = true
+
+# -- vSphere placement --------------------------------------------------------
+datacenter = "YourDatacenter"
+cluster    = "YourCluster"
+datastore  = "YourDatastore"
+vm_folder  = "Templates/Packer"
+vm_network = "YourPortgroup"
+
+# -- VM hardware --------------------------------------------------------------
+vm_name_prefix  = "HORIZON-GOLD"
+guest_os_type   = "windows11_64Guest"
+vm_firmware     = "efi"
+vm_cpus         = 4
+vm_cpu_cores    = 2
+vm_ram_mb       = 8192
+vm_disk_size_gb = 100
+
+# -- ISO paths (datastore paths) ----------------------------------------------
+windows_iso_path = "[YourDatastore] ISO/en-us_windows_11_business_editions_version_24h2_x64.iso"
+vmtools_iso_path = "[YourDatastore] ISO/VMware-tools-windows-13.0.10-x64.iso"
+
+# -- WinRM communicator -------------------------------------------------------
+winrm_username = "Administrator"
+winrm_password = "YourLocalAdminPassword"
+
+# -- Installer paths ----------------------------------------------------------
+osot_local_path            = "./installers/OmnissaHorizonOSOptimizationTool-x86_64-1.2.2603.23605577104.exe"
+horizon_agent_installer    = "./installers/Omnissa-Horizon-Agent-x86_64-2603-8.18.0-24273927036.exe"
+dem_agent_installer        = "./installers/Omnissa Dynamic Environment Manager Enterprise 2603 10.19 x64.msi"
+appvolumes_agent_installer = "./installers/App Volumes Agent.msi"
+
+# -- OSOT settings ------------------------------------------------------------
+osot_template_name = "Omnissa Templates\\Windows 10, 11 and Server 2022, 2025"
+
+# -- Omnissa product configuration --------------------------------------------
+appvolumes_manager      = "appvol.yourdomain.com"
+appvolumes_manager_port = "443"
+
+# -- Applications share (leave empty if not used) -----------------------------
+apps_share_path = ""
