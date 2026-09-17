@@ -1,9 +1,0 @@
-# Place installer files here. They are excluded from git via .gitignore.
-# Required files:
-#   OmnissaHorizonOSOptimizationTool-x86_64-1.2.2603.23605577104.exe
-#   Omnissa-Horizon-Agent-x86_64-2603-8.18.0-24273927036.exe
-#   Omnissa Dynamic Environment Manager Enterprise 2603 10.19 x64.msi
-#   App Volumes Agent.msi
-#   Windows 10, 11 and Server 2019, 2022 2026-07-08-085321.json
-#   sdelete64.exe
-#   horizon-agent-settings.txt (committed - no credentials)
