@@ -201,6 +201,22 @@
 # successful Optimize pass, full file path and bare directory both, never
 # produced anything. This fix uses OSOT's own unprompted default log
 # instead of -r for exactly that reason.
+#
+# RUNS TWICE as of 2026-09-17 (see roles/osot_optimize/meta/main.yml for the
+# allow_duplicates: true this now requires): per the user's explicit
+# observation, OSOT Generalize's own Sysprep pass reverses some of what this
+# role's Optimize pass does, so playbook.yml now calls this role a second
+# time right after store_apps_cleanup (i.e. after Generalize has exited
+# Audit Mode), in addition to its original pass before Generalize. This
+# restores something close to the "OSOT Optimize a second time" step that
+# was in the user's original 16-step sequence and was deliberately dropped
+# on 2026-09-11 (see playbook.yml's own header) - that removal assumed a
+# second pass had no documented benefit; the user's later observation about
+# Sysprep undoing part of the first pass is the concrete benefit that was
+# missing then. osot_optimize_pass_label and osot_optimize_report_name
+# below (both optional, both default to values matching the original
+# single-pass behavior) exist so the two invocations don't overwrite each
+# other's console output / build_log_dir log file.
 - name: Copy OSOT to VM
   ansible.windows.win_copy:
     src: "{{ osot_installer }}"
@@ -358,6 +374,11 @@
 - name: Show OSOT Optimize output
   ansible.builtin.debug:
     msg:
+      # osot_optimize_pass_label: optional, set by playbook.yml on the
+      # second invocation (e.g. "pass 2 of 2, post-Generalize") so build
+      # output distinguishes the two passes - defaults to empty, which
+      # renders identically to before this role ran twice.
+      - "OSOT Optimize {{ osot_optimize_pass_label | default('') }}"
       # osot_optimize_start is an async DISPATCH result (poll: 0, never
       # checked again via async_status - see that task's own header) -
       # .stdout isn't populated on it, only .started/.ansible_job_id are,
@@ -396,8 +417,8 @@
     $src = Get-ChildItem -Path "C:\ProgramData\Omnissa\Omnissa OS Optimization Tool\Log" -Filter "Optimize_*.log" -ErrorAction SilentlyContinue |
       Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if ($src) {
-      Copy-Item -Path $src.FullName -Destination "{{ build_log_dir }}\osot_optimize_report.log" -Force
-      Write-Host "Copied $($src.FullName) to {{ build_log_dir }}\osot_optimize_report.log"
+      Copy-Item -Path $src.FullName -Destination "{{ build_log_dir }}\{{ osot_optimize_report_name | default('osot_optimize_report.log') }}" -Force
+      Write-Host "Copied $($src.FullName) to {{ build_log_dir }}\{{ osot_optimize_report_name | default('osot_optimize_report.log') }}"
     } else {
       Write-Host "No Optimize_*.log found under OSOT's own log folder - nothing to copy."
     }
@@ -437,4 +458,4 @@
   ansible.windows.win_reboot:
     reboot_timeout: 600
     post_reboot_delay: 30
-    msg: "Rebooting after OSOT Optimize pass"
+    msg: "Rebooting after OSOT Optimize {{ osot_optimize_pass_label | default('pass') }}"

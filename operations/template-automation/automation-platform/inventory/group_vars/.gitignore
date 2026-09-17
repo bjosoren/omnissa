@@ -1,0 +1,10 @@
+# inventory/group_vars/.gitignore
+# Per-image local override files - see scripts/build.sh's own "Local,
+# untracked overrides" comment (right after GROUP_VARS_FILE is validated)
+# for the full mechanism. This repo is public, so real site-specific
+# values that shouldn't be public - guest_ip_cidr/guest_gateway/
+# guest_dns_servers today, see <image_key>.yml's own comment on those
+# three - belong in <image_key>.local.yml on each control node instead of
+# the committed <image_key>.yml. Never commit one of these, whatever its
+# name - that's the whole point of this file existing.
+*.local.yml

@@ -11,10 +11,10 @@
 # own bundled unattend.xml, which boots straight to interactive OOBE - a
 # human has to click through language/account screens, and there is no
 # WinRM listener up afterward. Packer's ansible provisioner (and this
-# playbook, which still has store_apps_cleanup/rds_role_install/
-# horizon_agent/dem/osot_finalize_cleanup/appvolumes/osot_finalize to run
-# after this point) would simply hang forever waiting for a connection that
-# never comes back. This mirrors exactly the problem autounattend.pkrtpl.hcl's own
+# playbook, which still has store_apps_cleanup/osot_optimize (pass 2 of 2)/
+# rds_role_install/horizon_agent/dem/appvolumes/osot_finalize_cleanup/
+# osot_finalize to run after this point) would simply hang forever waiting
+# for a connection that never comes back. This mirrors exactly the problem autounattend.pkrtpl.hcl's own
 # oobeSystem/FirstLogonCommands block already solves for the FIRST boot -
 # generalize_answer.xml.j2 re-solves it for THIS boot, since Sysprep's
 # mini-setup is effectively a second first-boot.
@@ -46,10 +46,11 @@
 # happen in dotnet35/windows_update/apps/osot_optimize between there and
 # here, so the guest is still in Audit Mode by the time this role runs -
 # nothing in this playbook exits it before the -g call below does. (Every
-# role after THIS one - store_apps_cleanup/rds_role_install/horizon_agent/
-# dem/osot_finalize_cleanup/appvolumes/osot_finalize - runs after Generalize
-# has already exited Audit Mode, back into the full-OOBE-with-autologon
-# state generalize_answer.xml.j2 reseals to.)
+# role after THIS one - store_apps_cleanup/osot_optimize (pass 2 of 2)/
+# rds_role_install/horizon_agent/dem/appvolumes/osot_finalize_cleanup/
+# osot_finalize - runs after Generalize has already exited Audit Mode, back
+# into the full-OOBE-with-autologon state generalize_answer.xml.j2 reseals
+# to.)
 #
 # Manual pause before Generalize: ADDED 2026-09-15, per the user's explicit
 # request, right before this role does anything. Generalize is a much
@@ -76,6 +77,18 @@
 # checkpoint before Optimize even runs was redundant with this one. This
 # pause is what's left: one manual look, positioned AFTER Optimize has
 # already run and proven itself on this build, not before it.
+#
+# Connection reset after reconnecting: ADDED 2026-09-17, after a real build
+# failed on the very next task (store_apps_cleanup's first win_shell) with
+# a WinRM "invalid selectors for the resource" fault - a stale-shell
+# symptom, not a real connectivity problem (wait_for_connection itself
+# reported ok). This role's own reboot is manual (Sysprep's -reboot, via
+# async win_shell + wait_for_connection - see below for why it can't just
+# be ansible.windows.win_reboot), so unlike every other reboot in this
+# pipeline, it doesn't get Ansible's own automatic connection-state reset
+# that win_reboot performs internally. See the "Reset Ansible's cached
+# WinRM connection" task at the end of this file for the full explanation
+# and the fix (`meta: reset_connection`).
 #
 # Same v3 file-gate construct as enter_audit_mode's own remaining pause -
 # pure controller-side `lookup()` + `pause`, no module dispatched to any
@@ -173,3 +186,35 @@
     sleep: 15
     timeout: 1800
     delay: 30
+
+# ADDED 2026-09-17, after a real build failed on the very next task
+# (store_apps_cleanup's first win_shell) with a WinRM fault straight out of
+# the "stale shell" family: "The WS-Management service cannot process the
+# request because the request contained invalid selectors for the
+# resource" (Bad HTTP response... Code 500, wsmanfault InvalidSelectors).
+# The failure lands on the first REAL task after this role, not on the
+# wait_for_connection task above (which reported ok) - that split is the
+# tell: wait_for_connection's own probe reconnected fine, but Ansible's
+# winrm connection plugin instance for this host was created earlier in
+# the play (before Sysprep tore the guest down) and, by design, reuses its
+# cached shell/session state across tasks within a play rather than
+# opening fresh state for every task. That cached state doesn't survive
+# the guest actually reinitializing (Sysprep's OOBE mini-setup is a much
+# bigger state change than a plain reboot) - the old shell ID the plugin
+# still had on file no longer exists on the "new" instance the guest just
+# became, hence "invalid selectors for the resource".
+#
+# This is a documented gotcha, not specific to this pipeline:
+# ansible.windows.win_reboot resets Ansible's own connection state for you
+# internally as part of what it does; a manual reboot path like this role's
+# own Sysprep-triggered one (async win_shell + wait_for_connection, not
+# win_reboot - see this file's own header for why Generalize's reboot has
+# to be handled this way) does NOT get that reset for free, and Ansible's
+# own docs call out `meta: reset_connection` as the fix for exactly this
+# case. Placed here, immediately after the connection is confirmed back up
+# and before control returns to playbook.yml's next role
+# (store_apps_cleanup), so every task from here on in the play opens a
+# genuinely fresh WinRM connection/shell instead of reusing pre-Sysprep
+# state.
+- name: Reset Ansible's cached WinRM connection after Sysprep/OOBE (avoids a stale-shell "invalid selectors" fault on the next task)
+  ansible.builtin.meta: reset_connection

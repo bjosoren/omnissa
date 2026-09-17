@@ -10,9 +10,21 @@
 #   THIS role (osot_finalize_cleanup): jobs 0-7 - the disk/profile/log
 #   housekeeping jobs (NGEN, DISM Side-by-Side cleanup, Compact/CompactOS,
 #   Disk Cleanup, clear event logs, disable Superfetch, clear default user
-#   profile, zero empty disk space) - positioned BEFORE appvolumes in
-#   playbook.yml, i.e. before the App Volumes Agent install, per the user's
-#   own explicit instruction.
+#   profile, zero empty disk space) - originally positioned BEFORE
+#   appvolumes in playbook.yml (i.e. before the App Volumes Agent install),
+#   per the user's own explicit instruction, so App Volumes wouldn't start
+#   until the potentially long-running job 7 (SDelete64.exe) had genuinely
+#   finished.
+#
+#   MOVED 2026-09-17, per the user's later explicit request: this role now
+#   runs AFTER appvolumes instead. The overlap concern above doesn't go
+#   away, it just flips - job 7 now zeros whatever free space is left once
+#   App Volumes is already installed, rather than before it - but that's
+#   fine for this role's actual purpose (the image just needs its disk
+#   zeroed by the time capture happens, not before every earlier install
+#   step). The wait-for-SDelete64 gate below now protects
+#   osot_finalize/hardening/cleanup from running while it's still busy,
+#   not appvolumes - see that task's own updated name/comment.
 #
 #   roles/osot_finalize (unchanged name, kept in its existing position after
 #   appvolumes): jobs 9-10 (Clear KMS Settings, Flush DNS cache) - the
@@ -33,15 +45,17 @@
 #
 # Why the user wanted this split at all: job 7 ("Zero empty disk space",
 # SDelete64.exe under the hood) can run for a long time on a large/
-# fragmented disk, and the user wants App Volumes installed only once that's
-# genuinely finished - not overlapping with it, and not just trusting this
-# task's own exit as proof it's done (see the dedicated wait-task below,
-# added same request). Separately, jobs 9-10 are specifically about network
-# identity (DNS) and KMS activation state - things you want reset as the
-# very LAST thing before the image goes cold for cloning, not staged
-# mid-pipeline before several more roles (appvolumes, hardening, cleanup)
-# still need to run their own WinRM-driven tasks over that same network
-# identity.
+# fragmented disk, and the user originally wanted App Volumes installed
+# only once that's genuinely finished - not overlapping with it, and not
+# just trusting this task's own exit as proof it's done (see the dedicated
+# wait-task below, added same request). As of the 2026-09-17 reorder noted
+# above, App Volumes now installs BEFORE this role runs at all, so the
+# wait-task's job is now to keep osot_finalize/hardening/cleanup from
+# starting while job 7 is still busy, not to gate App Volumes. Separately,
+# jobs 9-10 (in the other pass, roles/osot_finalize) are specifically about
+# network identity (DNS) and KMS activation state - things you want reset
+# as the very LAST thing before the image goes cold for cloning, which is
+# still true and unaffected by this reorder.
 - name: Ensure OSOT is present on VM (idempotent copy)
   ansible.windows.win_copy:
     src: "{{ osot_installer }}"
@@ -64,7 +78,11 @@
     msg: "{{ osot_finalize_cleanup_result.stdout_lines | default([]) }}"
 
 # ADDED 2026-09-16, per the user's own explicit follow-up request ("do not
-# proceed to app volumes if sdelete64.exe is running"): this task's own
+# proceed to app volumes if sdelete64.exe is running") - originally gated
+# App Volumes specifically; since the 2026-09-17 reorder above, App Volumes
+# already ran before this role starts, so what this now gates is
+# osot_finalize/hardening/cleanup, the roles that still run after it. This
+# task's own
 # blocking win_shell call above already waits for OmnissaHorizonOSOptimizationTool.exe's
 # OWN process to exit before returning - but OSOT is a closed-source vendor
 # tool, and there's no visibility into whether it genuinely waits on
@@ -82,7 +100,7 @@
 # retries: 480 / delay: 30 = 4 hours ceiling - deliberately generous, since
 # the user's own words were "sdelete kan take quite a long time" on this
 # disk. Adjust down if a real run shows it reliably finishes much sooner.
-- name: Wait for SDelete64.exe to finish before continuing (do not proceed to App Volumes while it's still running)
+- name: Wait for SDelete64.exe to finish before continuing (do not proceed to OSOT Finalize part 2 / hardening / cleanup while it's still running)
   ansible.windows.win_shell: |
     if (Get-Process -Name 'sdelete64' -ErrorAction SilentlyContinue) { "RUNNING" } else { "DONE" }
   register: sdelete64_poll
@@ -93,4 +111,4 @@
 
 - name: Confirm SDelete64.exe has finished
   ansible.builtin.debug:
-    msg: "SDelete64.exe is no longer running - safe to proceed to App Volumes install."
+    msg: "SDelete64.exe is no longer running - safe to proceed to OSOT Finalize part 2 / hardening / cleanup."

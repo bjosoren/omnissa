@@ -142,6 +142,30 @@ if [ ! -f "$GROUP_VARS_FILE" ]; then
   exit 1
 fi
 
+# ---- Local, untracked overrides (ADDED 2026-09-17) ----
+# inventory/group_vars/${IMAGE_KEY}.yml is committed to this repo, which is
+# public - per the user's explicit request, real site-specific values that
+# shouldn't be public (guest_ip_cidr/guest_gateway/guest_dns_servers today;
+# see that file's own comment on those three for the incident this came
+# from - a real internal /24 briefly ended up committed) live instead in
+# inventory/group_vars/${IMAGE_KEY}.local.yml, which is .gitignore'd (see
+# inventory/group_vars/.gitignore) and only ever exists locally on each
+# control node, never in git. Entirely optional: if it's not present, every
+# ansible-playbook call below behaves exactly as it did before this change,
+# using only the committed (placeholder-safe) group_vars file. When it IS
+# present, it's loaded via its own -e "@..." AFTER $GROUP_VARS_FILE, so its
+# values win over the committed placeholders (later -e flags take
+# precedence in Ansible) without editing or overriding the whole file.
+# GROUP_VARS_ARGS is built once here and reused by every ansible-playbook
+# call in this script (and the equivalent block in publish_to_pool.sh),
+# rather than repeating the same "if local file exists" check five times.
+LOCAL_VARS_FILE="$PROJECT_ROOT/inventory/group_vars/${IMAGE_KEY}.local.yml"
+GROUP_VARS_ARGS=(-e "@$GROUP_VARS_FILE")
+if [ -f "$LOCAL_VARS_FILE" ]; then
+  echo "==> Using local overrides from $LOCAL_VARS_FILE (not tracked in git)"
+  GROUP_VARS_ARGS+=(-e "@$LOCAL_VARS_FILE")
+fi
+
 # ---- Per-image naming (VM_NAME / PUBLISHED_VM_PREFIX) ----
 # See images/ubt_2404_tpl/image.conf's own comments for why these two
 # values are declared explicitly per image rather than derived from
@@ -241,7 +265,7 @@ ansible-playbook \
   --vault-password-file "$VAULT_PASS_FILE" \
   -e "@$PROJECT_ROOT/inventory/group_vars/all.yml" \
   -e "@$PROJECT_ROOT/inventory/group_vars/all/vault.yml" \
-  -e "@$GROUP_VARS_FILE" \
+  "${GROUP_VARS_ARGS[@]}" \
   "$IMAGE_DIR/resolve_vars.yml"
 
 get() {
@@ -265,7 +289,7 @@ ansible-playbook \
   --vault-password-file "$VAULT_PASS_FILE" \
   -e "@$PROJECT_ROOT/inventory/group_vars/all.yml" \
   -e "@$PROJECT_ROOT/inventory/group_vars/all/vault.yml" \
-  -e "@$GROUP_VARS_FILE" \
+  "${GROUP_VARS_ARGS[@]}" \
   -e "vm_name=$VM_NAME" \
   -e "check_result_file=$PREFLIGHT_FILE" \
   "$IMAGE_DIR/preflight_check_vm.yml"
@@ -285,7 +309,7 @@ if [ "$VM_EXISTS" = "True" ]; then
         --vault-password-file "$VAULT_PASS_FILE" \
         -e "@$PROJECT_ROOT/inventory/group_vars/all.yml" \
         -e "@$PROJECT_ROOT/inventory/group_vars/all/vault.yml" \
-        -e "@$GROUP_VARS_FILE" \
+        "${GROUP_VARS_ARGS[@]}" \
         -e "vm_name=$VM_NAME" \
         "$IMAGE_DIR/delete_vm.yml"
       ;;
@@ -433,7 +457,7 @@ ansible-playbook \
   --vault-password-file "$VAULT_PASS_FILE" \
   -e "@$PROJECT_ROOT/inventory/group_vars/all.yml" \
   -e "@$PROJECT_ROOT/inventory/group_vars/all/vault.yml" \
-  -e "@$GROUP_VARS_FILE" \
+  "${GROUP_VARS_ARGS[@]}" \
   -e "vm_name=$VM_NAME" \
   -e "published_vm_name=$PUBLISHED_VM_NAME" \
   "$IMAGE_DIR/post_build_snapshot.yml"
@@ -508,7 +532,7 @@ case "$REPLY" in
       --vault-password-file "$VAULT_PASS_FILE" \
       -e "@$PROJECT_ROOT/inventory/group_vars/all.yml" \
       -e "@$PROJECT_ROOT/inventory/group_vars/all/vault.yml" \
-      -e "@$GROUP_VARS_FILE" \
+      "${GROUP_VARS_ARGS[@]}" \
       -e "vm_name=$VM_NAME" \
       "$IMAGE_DIR/delete_vm.yml"
     echo "==> Done: $VM_NAME deleted."

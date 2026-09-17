@@ -152,22 +152,49 @@
 # watching a real build's single Finalize pass run near the end of the
 # pipeline. roles/osot_finalize_cleanup (jobs 0-7: disk/profile/log
 # housekeeping, including the potentially long-running "zero empty disk
-# space" SDelete64.exe job) now runs BEFORE appvolumes, and waits for
-# SDelete64.exe to genuinely finish (not just for OSOT's own process to
-# exit) before letting the play continue - see that role's own header. The
-# existing roles/osot_finalize (jobs 9-10: KMS/DNS reset) keeps its
-# original position, after appvolumes and right before hardening/cleanup -
-# see that role's own header for why job 9 in particular is flagged as a
-# reversal of an earlier explicit decision, not a silent change. Job 11
-# ("Release IP Address") was ALSO originally split into this second pass but
-# REMOVED the same day, before ever shipping in a real build - a build
-# still on the pre-split code failed with a WinRM ConnectTimeoutError right
-# where job 11 would run, and since rdsh_2025_tpl.pkr.hcl's own
-# communicator = "winrm" means Packer's OWN shutdown_command rides that same
-# channel right after this role, the risk wasn't confined to just this one
-# Ansible task - see roles/osot_finalize's own header for the full
-# diagnosis and the user's explicit choice to drop it rather than risk
-# another failed build cycle on an undocumented Packer/WinRM interaction.
+# space" SDelete64.exe job) originally ran BEFORE appvolumes for exactly
+# that reason - REORDERED 2026-09-17, see below. The existing
+# roles/osot_finalize (jobs 9-10: KMS/DNS reset) keeps its original
+# position, after appvolumes and right before hardening/cleanup - see that
+# role's own header for why job 9 in particular is flagged as a reversal of
+# an earlier explicit decision, not a silent change. Job 11 ("Release IP
+# Address") was ALSO originally split into this second pass but REMOVED the
+# same day, before ever shipping in a real build - a build still on the
+# pre-split code failed with a WinRM ConnectTimeoutError right where job 11
+# would run, and since rdsh_2025_tpl.pkr.hcl's own communicator = "winrm"
+# means Packer's OWN shutdown_command rides that same channel right after
+# this role, the risk wasn't confined to just this one Ansible task - see
+# roles/osot_finalize's own header for the full diagnosis and the user's
+# explicit choice to drop it rather than risk another failed build cycle on
+# an undocumented Packer/WinRM interaction.
+#
+# REORDERED 2026-09-17, per the user's explicit request, made while
+# reviewing this pipeline's own flow diagram: appvolumes now runs BEFORE
+# osot_finalize_cleanup (Finalize part 1), reversing the 2026-09-16 decision
+# above that put Finalize part 1 first specifically so App Volumes wouldn't
+# start until the (potentially long-running) SDelete64.exe disk-zeroing job
+# had genuinely finished. That overlap concern doesn't disappear with this
+# reorder, it just moves: disk zeroing (job 7) now runs AFTER the App
+# Volumes install instead of before it, so it zeros whatever free space is
+# left post-App-Volumes rather than pre-App-Volumes - functionally fine (a
+# golden image only needs the disk zeroed by the time all OSOT Finalize
+# passes complete, not before every earlier step), but a real behavior
+# change worth flagging, not just a cosmetic reorder. See
+# roles/osot_finalize_cleanup's own header for the matching update.
+#
+# SECOND OSOT OPTIMIZE PASS ADDED 2026-09-17, per the user's explicit
+# observation: OSOT Generalize's own Sysprep run reverses some of what the
+# first Optimize pass does, so a second Optimize pass now runs right after
+# store_apps_cleanup (i.e. after Generalize has exited Audit Mode), in
+# addition to the original pass before Generalize. This restores something
+# close to the second "OSOT Optimize" step in the user's original 16-step
+# sequence, which was deliberately dropped on 2026-09-11 on the assumption
+# that a second pass had no documented benefit (see this file's own header
+# above) - the Sysprep-reversal observation is the concrete benefit that was
+# missing then. Requires roles/osot_optimize/meta/main.yml's
+# allow_duplicates: true (see that file) - without it, Ansible's roles:
+# keyword silently skips a role invoked twice with the same name/params in
+# one play.
 - name: Build the Windows Server 2025 Omnissa Horizon RDSH golden image
   hosts: all
   gather_facts: true
@@ -179,15 +206,19 @@
     - role: windows_update     # Full looped Windows Update pass - user's step 4 (RE-ENABLED, see header above) (now runs inside Audit Mode)
       when: enable_windows_update | default(true) | bool
     - role: apps               # NFS-drop-folder-pattern optional extra apps - user's step 5 (now runs inside Audit Mode)
-    - role: osot_optimize      # OSOT Optimize pass - user's step 6 (runs inside Audit Mode)
+    - role: osot_optimize      # OSOT Optimize pass 1 of 2 - user's step 6 (runs inside Audit Mode). Pass 2 runs below, after Generalize - see this file's own header, "SECOND OSOT OPTIMIZE PASS ADDED 2026-09-17"
     - role: osot_generalize    # MANUAL PAUSE for pre-Generalize review, then OSOT Generalize (Sysprep) + reconnect - user's step 7 (exits Audit Mode) - see role header
-    - role: store_apps_cleanup # Remove Copilot/Bing Search Store apps - user's step 9 (step 8's duplicate Optimize dropped, see header)
+    - role: store_apps_cleanup # Remove Copilot/Bing Search Store apps - user's step 9
+    - role: osot_optimize      # OSOT Optimize pass 2 of 2 - ADDED 2026-09-17, re-applies optimizations Sysprep/Generalize reverses (user's explicit observation); requires roles/osot_optimize/meta/main.yml's allow_duplicates: true
+      vars:
+        osot_optimize_pass_label: "(pass 2 of 2, post-Generalize)"
+        osot_optimize_report_name: "osot_optimize_report_pass2.log"
     - role: rds_role_install   # RDS-RD-Server role + .NET 4.x features, reboot, verify - repositioned, must run before horizon_agent
     - role: horizon_agent      # Horizon Agent install in RDSH mode, reboot, verify - user's step 10
     - role: dem                # Omnissa Dynamic Environment Manager, reboot, verify - user's step 11
     # GPU Drivers - Optional (user's step 12) - no role, see header above
-    - role: osot_finalize_cleanup # OSOT Finalize pass 1/2 (disk/profile/log cleanup jobs 0-7, waits for SDelete64.exe to finish) - NEW 2026-09-16, runs BEFORE App Volumes per the user's explicit request, see role header
-    - role: appvolumes         # Omnissa App Volumes Agent, reboot, verify - user's step 13
+    - role: appvolumes         # Omnissa App Volumes Agent, reboot, verify - user's step 13 - MOVED 2026-09-17 to run before OSOT Finalize part 1, per the user's explicit request; reverses the 2026-09-16 ordering, see this file's own header, "REORDERED 2026-09-17"
+    - role: osot_finalize_cleanup # OSOT Finalize pass 1/2 (disk/profile/log cleanup jobs 0-7, waits for SDelete64.exe to finish) - NEW 2026-09-16, MOVED 2026-09-17 to run AFTER App Volumes, see role header
     - role: osot_finalize      # OSOT Finalize pass 2/2 (network/licensing jobs 9-10; job 11 "Release IP" dropped, see role header) - not a numbered user step, but required by both PDFs, see header above - SPLIT 2026-09-16, see role header
     - role: hardening          # RDS licensing mode + Remote Desktop Users group (documentation-only, see role header)
     - role: cleanup            # Clear C:\Temp; Packer's shutdown_command (user's step 14) powers off after this

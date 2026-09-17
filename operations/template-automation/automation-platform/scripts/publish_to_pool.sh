@@ -133,6 +133,22 @@ if [ ! -f "$GROUP_VARS_FILE" ]; then
   exit 1
 fi
 
+# ---- Local, untracked overrides (ADDED 2026-09-17) ----
+# Same mechanism as scripts/build.sh's own "Local, untracked overrides"
+# block - see that file's comment for the full rationale (real
+# site-specific values, like guest_ip_cidr/guest_gateway/guest_dns_servers,
+# kept out of this public repo via an optional, .gitignore'd
+# inventory/group_vars/${IMAGE_KEY}.local.yml). This script resolves vars
+# independently of build.sh (it can be run standalone - see this file's own
+# header), so it needs the same local-file check rather than assuming
+# build.sh already handled it.
+LOCAL_VARS_FILE="$PROJECT_ROOT/inventory/group_vars/${IMAGE_KEY}.local.yml"
+GROUP_VARS_ARGS=(-e "@$GROUP_VARS_FILE")
+if [ -f "$LOCAL_VARS_FILE" ]; then
+  echo "==> Using local overrides from $LOCAL_VARS_FILE (not tracked in git)"
+  GROUP_VARS_ARGS+=(-e "@$LOCAL_VARS_FILE")
+fi
+
 if [ ! -f "$VAULT_PASS_FILE" ]; then
   echo "Vault password file not found at $VAULT_PASS_FILE - see the platform post's" >&2
   echo "'Credentials the platform needs' section." >&2
@@ -147,7 +163,7 @@ ansible-playbook \
   --vault-password-file "$VAULT_PASS_FILE" \
   -e "@$PROJECT_ROOT/inventory/group_vars/all.yml" \
   -e "@$PROJECT_ROOT/inventory/group_vars/all/vault.yml" \
-  -e "@$GROUP_VARS_FILE" \
+  "${GROUP_VARS_ARGS[@]}" \
   "$IMAGE_DIR/resolve_vars.yml"
 
 get() {
@@ -219,11 +235,30 @@ else
   echo "forced logoff)."
 fi
 echo ""
-read -r -p "Type the $TARGET_TYPE name ($TARGET_NAME) to confirm: " CONFIRM
-if [ "$CONFIRM" != "$TARGET_NAME" ]; then
-  echo "Confirmation did not match - aborting, nothing was pushed." >&2
-  exit 1
-fi
+# CHANGED 2026-09-17, per the user's explicit request: was "type the exact
+# target name to confirm" (a full retype, deliberately slower/harder to
+# fat-finger past). Now a lighter y/n prompt that also accepts a different
+# target name typed directly, to push to a target other than the one
+# resolved from group_vars without having to edit that file first - e.g.
+# publishing a one-off test build to a throwaway farm. Trade-off worth
+# knowing: a bare "y" is easier to hit by reflex than retyping "RDSHFARM1P1"
+# was, so this leans on the summary printed just above (which target, what
+# happens) being read before answering, not on the confirmation step itself
+# to catch inattention. Empty input (just Enter) is treated as "no".
+echo "Publish to $TARGET_TYPE '$TARGET_NAME' on $HORIZON_SERVER? [y/N], or type a"
+read -r -p "different $TARGET_TYPE name to publish to that one instead: " CONFIRM
+case "$CONFIRM" in
+  y|Y|yes|Yes|YES)
+    ;; # keep TARGET_NAME as resolved from group_vars
+  n|N|no|No|NO|"")
+    echo "Aborting - nothing was pushed." >&2
+    exit 1
+    ;;
+  *)
+    echo "Publishing to a different $TARGET_TYPE than configured: '$CONFIRM' (group_vars has '$TARGET_NAME')"
+    TARGET_NAME="$CONFIRM"
+    ;;
+esac
 
 # curl -k: this platform's internal CA isn't assumed trusted by the caller's
 # resolver, same posture as vcenter_insecure_connection elsewhere in this
@@ -334,14 +369,16 @@ if [ "$TARGET_TYPE" = "pool" ]; then
   # and isn't reliable enough to depend on here, so pull the full pool list
   # and match client-side instead - desktop pool counts per Connection
   # Server are small enough that this is cheap either way.
+  # Matches against TARGET_NAME, not HORIZON_POOL directly - the confirmation
+  # prompt above may have overridden it to a different pool name.
   POOL_LIST="$(api GET "/rest/inventory/v1/desktop-pools")"
-  POOL_ID="$(json_get_id "$POOL_LIST" "name" "$HORIZON_POOL" "id")"
+  POOL_ID="$(json_get_id "$POOL_LIST" "name" "$TARGET_NAME" "id")"
   if [ -z "$POOL_ID" ]; then
-    echo "Could not find a desktop pool named '$HORIZON_POOL'." >&2
+    echo "Could not find a desktop pool named '$TARGET_NAME'." >&2
     echo "Raw response: $POOL_LIST" >&2
     exit 1
   fi
-  echo "    pool=$POOL_ID ($HORIZON_POOL)"
+  echo "    pool=$POOL_ID ($TARGET_NAME)"
 
   echo "==> Scheduling the desktop pool push-image operation"
   # logoff_policy WAIT_FOR_LOGOFF (not FORCE_LOGOFF) and stop_on_first_error
@@ -370,14 +407,16 @@ print(json.dumps({
 else
   # RDS farm workflow - see this script's "Pool vs farm" header comment for
   # where /rest/inventory/v2/farms + schedule-maintenance came from.
+  # Matches against TARGET_NAME, not HORIZON_FARM directly - the confirmation
+  # prompt above may have overridden it to a different farm name.
   FARM_LIST="$(api GET "/rest/inventory/v2/farms")"
-  FARM_ID="$(json_get_id "$FARM_LIST" "name" "$HORIZON_FARM" "id")"
+  FARM_ID="$(json_get_id "$FARM_LIST" "name" "$TARGET_NAME" "id")"
   if [ -z "$FARM_ID" ]; then
-    echo "Could not find an RDS farm named '$HORIZON_FARM'." >&2
+    echo "Could not find an RDS farm named '$TARGET_NAME'." >&2
     echo "Raw response: $FARM_LIST" >&2
     exit 1
   fi
-  echo "    farm=$FARM_ID ($HORIZON_FARM)"
+  echo "    farm=$FARM_ID ($TARGET_NAME)"
 
   echo "==> Scheduling the farm maintenance/push-image operation"
   # Same conservative choices as the pool path above (WAIT_FOR_LOGOFF,

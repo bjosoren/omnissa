@@ -13,10 +13,18 @@
 # vault_local_admin_password becomes.
 
 # ---- Placement ----
-vcenter_cluster: "GPU-02"
-vcenter_datastore: "gpu-esxi02_VMFS2"
-vcenter_folder: "HZ-Templates"           # <- your vCenter VM folder for these builds
-vcenter_network: "vlan12_vdi"            # <- the port group the template builds on
+# PLACEHOLDER VALUES ONLY, on purpose - this repo is public. Extended
+# 2026-09-17, per the user's explicit request, to cover every site-specific
+# value in this file the same way the "Guest network" section below already
+# handled guest_ip_cidr/guest_gateway/guest_dns_servers - not just network
+# fields. Real values belong in rdsh_2025_tpl.local.yml on each control
+# node; see the "Guest network" section below for the full mechanism, and
+# rdsh_2025_tpl.local.yml.example (same directory) for every overridable
+# key documented in one place.
+vcenter_cluster: "CHANGEME-cluster"         # <- placeholder - real value goes in rdsh_2025_tpl.local.yml
+vcenter_datastore: "CHANGEME-datastore"     # <- placeholder - real value goes in rdsh_2025_tpl.local.yml
+vcenter_folder: "CHANGEME-folder"           # <- placeholder - real value goes in rdsh_2025_tpl.local.yml
+vcenter_network: "CHANGEME-portgroup"       # <- placeholder - real value goes in rdsh_2025_tpl.local.yml
 
 # ---- Sizing ----
 # RDSH hosts serve multiple concurrent sessions - sized well above
@@ -45,7 +53,7 @@ vm_version: 20                                    # hardware version 20+ needed 
 # already serves /vmimages/tools-isoimages/windows.iso from; you should not
 # need to change that second path.
 iso_paths:
-  - "[gpu-esxi02_VMFS2] ISO/en-us_windows_server_2025_updated_feb_2025_x64_dvd_3733c10e.iso"
+  - "[CHANGEME-datastore] ISO/CHANGEME-windows-server-2025-install.iso"   # <- placeholder - real value goes in rdsh_2025_tpl.local.yml
   - "[] /vmimages/tools-isoimages/windows.iso"
 
 # ---- Guest network ----
@@ -59,10 +67,27 @@ iso_paths:
 # only gets the guest .170 in practice if your DHCP server has a
 # reservation binding that address to mac_address below; otherwise the
 # guest will DHCP to whatever address the server hands out.
+#
+# PLACEHOLDER VALUES ONLY, on purpose - this repo is public. The three
+# values below are RFC 5737 TEST-NET-2 (198.51.100.0/24), reserved for
+# documentation and never a real, routable network - not your actual
+# reservation. (They briefly WERE real internal values here for real,
+# which is exactly the mistake this setup now guards against - see
+# below.)
+#
+# Real values belong in inventory/group_vars/rdsh_2025_tpl.local.yml on
+# each control node instead - copy rdsh_2025_tpl.local.yml.example (same
+# directory) to that filename and fill it in there. That file is
+# .gitignore'd and never committed; scripts/build.sh and
+# scripts/publish_to_pool.sh both load it automatically when present and
+# its values override these placeholders (see either script's own "Local,
+# untracked overrides" comment). Only override what you actually need to
+# change - anything left out of the local file falls through to the
+# placeholders here.
 guest_hostname: rdsh-2025-tpl
-guest_ip_cidr: "198.51.100.170/24"    # <- your reserved IP/prefix
-guest_gateway: "198.51.100.1"         # <- your gateway
-guest_dns_servers:
+guest_ip_cidr: "198.51.100.170/24"    # <- placeholder (TEST-NET-2) - real value goes in rdsh_2025_tpl.local.yml
+guest_gateway: "198.51.100.1"         # <- placeholder (TEST-NET-2) - real value goes in rdsh_2025_tpl.local.yml
+guest_dns_servers:                    # <- placeholders (TEST-NET-2) - real values go in rdsh_2025_tpl.local.yml
   - "198.51.100.11"
   - "198.51.100.20"
 
@@ -71,8 +96,10 @@ guest_dns_servers:
 # - pin one if this network needs a DHCP reservation or MAC allowlisting;
 # leave "" for auto-assignment. Must be in vSphere's manually-assignable
 # VMware OUI range (00:50:56:00:00:00-00:50:56:3F:FF:FF) and unique on this
-# vCenter.
-mac_address: "00:50:56:00:12:35"     # <- create the DHCP reservation for 198.51.100.170 against this MAC
+# vCenter. PLACEHOLDER ("" = auto-assign) on purpose - a pinned MAC paired
+# with the real guest_ip_cidr reservation above would together identify a
+# real host on a real network; real value goes in rdsh_2025_tpl.local.yml.
+mac_address: ""     # <- placeholder (auto-assign) - real value goes in rdsh_2025_tpl.local.yml if you need a DHCP reservation/MAC allowlisting
 
 # ---- Windows build ----
 timezone: "W. Europe Standard Time"   # Windows tz display name, not IANA - see variables.pkr.hcl's comment
@@ -129,7 +156,7 @@ osot_generalize_manual_pause: false
 # ADDLOCAL string from these. Defaults below mirror the source guide's own
 # RDSH-tuned choices (NGVC on for instant-clone RDSH, PrintRedir/PSG on as
 # RDSH-relevant, RDP/RDSH3D off unless you have vGPU-backed 3D RDSH).
-horizon_agent_installer: "/mnt/wdnfs/Ansible/horizon/Omnissa-Horizon-Agent-x86_64-2603-8.18.0-24273927036.exe"   # <- on your NFS share's horizon/ folder
+horizon_agent_installer: "/mnt/wdnfs/Ansible/horizon/CHANGEME-horizon-agent-installer.exe"   # <- placeholder - real value (on your NFS share's horizon/ folder) goes in rdsh_2025_tpl.local.yml
 horizon_vc_managed: true
 horizon_core: true
 horizon_blast: true
@@ -153,7 +180,7 @@ horizon_psg: true
 horizon_url_filtering: false
 
 # ---- DEM Agent ----
-dem_agent_installer: "/mnt/wdnfs/Ansible/dem/Omnissa Dynamic Environment Manager Enterprise 2603 10.19 x64.msi"   # <- on your NFS share's dem/ folder
+dem_agent_installer: "/mnt/wdnfs/Ansible/dem/CHANGEME-dem-agent-installer.msi"   # <- placeholder - real value (on your NFS share's dem/ folder) goes in rdsh_2025_tpl.local.yml
 dem_flex_engine: true
 dem_flex_migrate: false
 dem_self_support: true
@@ -163,8 +190,8 @@ dem_noad_config: ""
 dem_comp_env_config: ""
 
 # ---- App Volumes Agent ----
-appvolumes_agent_installer: "/mnt/wdnfs/Ansible/appvolumes/App Volumes Agent.msi"   # <- on your NFS share's appvolumes/ folder
-appvolumes_manager: "appvol.example.com"   # <- your App Volumes Manager hostname
+appvolumes_agent_installer: "/mnt/wdnfs/Ansible/appvolumes/CHANGEME-appvolumes-agent-installer.msi"   # <- placeholder - real value (on your NFS share's appvolumes/ folder) goes in rdsh_2025_tpl.local.yml
+appvolumes_manager: "appvol.example.com"   # already safe - generic placeholder hostname
 appvolumes_port: 443
 appvolumes_ssl_validation: 1
 
@@ -188,7 +215,7 @@ appvolumes_ssl_validation: 1
 # that share browser, not the control node's own mount path; following the
 # same /mnt/wdnfs/Ansible/<component>/<file> convention every other
 # installer var above already uses for that same share.
-osot_installer: "/mnt/wdnfs/Ansible/osot/OmnissaHorizonOSOptimizationTool-x86_64-1.2.2603.23605577104.exe"
+osot_installer: "/mnt/wdnfs/Ansible/osot/CHANGEME-osot-installer.exe"   # <- placeholder - real value goes in rdsh_2025_tpl.local.yml
 
 # osot_template: NOT currently passed to -t (see roles/osot_optimize's own
 # header) - a real build failed to load exactly this string
@@ -216,12 +243,18 @@ osot_template: "Omnissa\\Windows 10, 11 and Server 2022, 2025"
 #   8 "Creates local group policies" (needs LGPO.exe) - not wanted, skipped
 #     on purpose, not staged.
 #
-# FIRST pass (roles/osot_finalize_cleanup, runs BEFORE appvolumes): the
-# disk/profile/log housekeeping jobs.
+# FIRST pass (roles/osot_finalize_cleanup): the disk/profile/log
+# housekeeping jobs. Originally ran BEFORE appvolumes so App Volumes
+# wouldn't start until job 7 (SDelete64.exe) genuinely finished - MOVED
+# 2026-09-17, per the user's explicit request, to run AFTER appvolumes
+# instead (see roles/osot_finalize_cleanup's own header for the full
+# before/after reasoning). Still runs before the second pass below.
 osot_finalize_cleanup_job_numbers: "0 1 2 3 4 5 6 7"
 
-# SECOND pass (roles/osot_finalize, runs AFTER appvolumes, right before
-# hardening/cleanup/shutdown): the network/licensing-identity reset jobs.
+# SECOND pass (roles/osot_finalize, right before hardening/cleanup/
+# shutdown): the network/licensing-identity reset jobs. Runs after both
+# appvolumes and osot_finalize_cleanup, unaffected by the 2026-09-17
+# reorder above.
 # Job 9 "Clears KMS Settings" is NOW INCLUDED - FLAGGED, not a silent
 # change: the original 2026-09-11 comment on this variable excluded job 9
 # because "this image uses win_kms_key's GVLK... clearing KMS settings here
@@ -257,13 +290,13 @@ osot_finalize_job_numbers: "9 10"
 # folder - job 7 needs the 64-bit one per the PDF) lives alongside the OSOT
 # exe itself. Only used by roles/osot_finalize_cleanup now (job 7 moved
 # there in the 2026-09-16 split above).
-osot_finalize_sdelete64_installer: "/mnt/wdnfs/Ansible/osot/sdelete64.exe"
+osot_finalize_sdelete64_installer: "/mnt/wdnfs/Ansible/osot/CHANGEME-sdelete64-installer.exe"   # <- placeholder - real value goes in rdsh_2025_tpl.local.yml
 
 # ---- RDSH login group ----
 # Added to the local Remote Desktop Users group by roles/hardening - see
 # that role's header comment for why RD licensing mode itself is NOT set
 # here. Matches ubt_2404_tpl's linux_login_group in spirit.
-rdsh_login_group: "GU_HZ_HZRDSHP1"   # <- matches the real AD group name (trailing "1"), confirmed against ADUC
+rdsh_login_group: "CHANGEME-ad-group"   # <- placeholder - real AD group name goes in rdsh_2025_tpl.local.yml
 
 # ---- Optional extra apps (roles/apps) ----
 # Empty by default - see that role's header comment for the format. Each
@@ -286,9 +319,9 @@ apps_to_install: []
 # workflow - see that script's own "Pool vs farm" header comment for the
 # farm-specific endpoints and how confident to be in them (the farm path
 # is new and, unlike the pool path, has not yet been run for real).
-horizon_connection_server: "cs-srv-01.example.com"
-horizon_farm_name: "RDSHFARM1P1"   # <- NOT horizon_pool_name - RDSH publishes to a Farm (Automated Farm / Instant Clone), confirmed via Horizon Console
-horizon_api_username: "hz_admin"
-horizon_api_domain: "example.com"
+horizon_connection_server: "cs-srv-01.example.com"   # already safe - generic placeholder hostname
+horizon_farm_name: "CHANGEME-farm-name"   # <- placeholder - real value goes in rdsh_2025_tpl.local.yml (NOT horizon_pool_name - RDSH publishes to a Farm)
+horizon_api_username: "CHANGEME-api-username"   # <- placeholder - real value goes in rdsh_2025_tpl.local.yml
+horizon_api_domain: "example.com"   # already safe - generic placeholder domain
 # vault_horizon_api_password goes in inventory/group_vars/all/vault.yml,
 # same entry ubt_2404_tpl.yml already uses (shared, not per-image).
