@@ -1,0 +1,133 @@
+# inventory/group_vars/ubt_2404_tpl.yml
+# Add this file to your existing ~/golden-images/inventory/group_vars/ alongside
+# all.yml - it holds this one project's non-secret vars, per the platform post's
+# "each project gets its own group_vars file" convention. Nothing here is
+# secret; the domain-join password and any other credential stay in
+# inventory/group_vars/all/vault.yml.
+
+# ---- Placement ----
+vcenter_cluster: GPU-01          # <- your cluster
+vcenter_datastore: gpu-esxi01_VMFS2        # <- your datastore
+vcenter_folder: HZ-Templates        # <- your vCenter VM folder for these builds
+vcenter_network: "vlan12_vdi"        # <- the port group the template builds on
+
+# ---- Sizing ----
+vm_cpu_count: 2
+vm_mem_size_mb: 4096
+vm_disk_size_mb: 65536
+
+# ---- Install media ----
+# Path(s) to the Ubuntu 24.04 Desktop point-release ISO already staged on a
+# vSphere datastore or content library - Packer mounts it directly rather
+# than downloading, so there's no checksum var to keep alongside it.
+# Datastore syntax: "[datastore_name] path/to/file.iso"
+# Content library syntax: "LibraryName/ItemName/file.iso"
+iso_paths:
+  - "[gpu-esxi01_VMFS2] ISO/ubuntu-24.04.3-desktop-amd64.iso"
+
+# ---- Guest network ----
+# Reserve this address ahead of time (DHCP reservation + DNS A record) per
+# the platform post's "Each of those ansible_host values needs a real,
+# stable IP" section - this is the template build's own address, separate
+# from ansible_host in hosts.ini, since Packer talks to it directly during
+# the build rather than through the inventory.
+guest_hostname: ubt-2404-tpl
+guest_ip_cidr: "198.51.100.150/24"     # <- your reserved IP/prefix
+guest_gateway: "198.51.100.1"          # <- your gateway
+guest_dns_servers:
+  - "198.51.100.11"
+  - "198.51.100.20"
+
+# ---- MAC address ----
+# Left empty, vSphere auto-assigns a fresh random MAC to every rebuild - fine
+# functionally, but useless if this network requires a DHCP reservation
+# (matching guest_ip_cidr above) or any other MAC-based allowlisting, since
+# a new VM (and therefore a new MAC) gets created on every single run.
+# Pinning one fixed MAC here means the reservation only has to be created
+# once and keeps working across every future rebuild of this template.
+# Must be in vSphere's own manually-assignable VMware OUI range
+# (00:50:56:00:00:00-00:50:56:3F:FF:FF - outside that range vCenter will
+# refuse to power the VM on) and must not collide with anything else on
+# this vCenter - check before you commit to one. Leave as "" to go back to
+# auto-assignment.
+mac_address: "00:50:56:00:12:34"     # <- REPLACE with your own unique MAC, then create the DHCP reservation for it
+
+# ---- Horizon pool specifics ----
+computer_ou_dn: "OU=HZUBTP1,OU=Computers,OU=Horizon,OU=Virtual,OU=EUC,DC=ad,DC=admin,DC=example,DC=com"
+
+# The domain's short/NetBIOS (pre-Windows 2000) name - a separate AD
+# attribute an admin can set independently of the DNS domain name above, so
+# it can't be safely derived from domain_fqdn. Confirm yours by running
+# `net ads lookup -S <any-domain-controller-ip>` from any Linux host with
+# samba-common-bin installed and reading the "Pre-Win2k Domain:" line, or
+# check Active Directory Domains and Trusts on a domain controller. Needed by
+# the domain_join role's smb.conf (net ads join refuses to run without it).
+#
+# This was still sitting at the placeholder value ("DOMAIN") on a real
+# build - net ads join refused to proceed and said so directly: `Invalid
+# configuration ("workgroup" set to 'DOMAIN', should be 'AD')`. Set to AD
+# on that basis (Samba's own join process detected the real value from the
+# domain itself when it rejected the mismatch) - matches this domain's FQDN
+# starting with "ad." (example.com) too. Worth confirming with the
+# net ads lookup command above if you're not the one who originally set up
+# this domain, but this is Samba telling you its own answer, not a guess.
+domain_netbios_name: "AD"
+
+linux_login_group: GU_HZ_HZUBTP1
+
+# Non-secret half of the AD domain-join account from the platform post's
+# "Credentials the platform needs" section - the password half is
+# vault_linux_domain_join_password, already in inventory/group_vars/all/vault.yml.
+linux_domain_join_username: "svc_lnx_adjoin@example.com"
+
+# Before joining, the domain_join role checks computer_ou_dn for a leftover
+# computer object matching guest_hostname and deletes it if found - same
+# thing you'd otherwise do by hand before every re-run. Defaults to true even
+# without this line present (see roles/domain_join/tasks/main.yml), so this
+# only needs to exist here if you want it OFF for this environment. Needs
+# the account above to hold "Delete Computer Objects" permission on
+# computer_ou_dn, not just create/join rights - see that role's comments.
+domain_join_delete_stale_computer_object: true
+
+# ---- Horizon Agent ----
+# Stage the tarball once per agent version into images/ubt_2404_tpl/files/ -
+# Omnissa gates the download behind a portal login so this can't be fetched
+# automatically. This has to be kept in sync by hand every time you stage a
+# new agent version (Omnissa's own filenames embed the version, e.g.
+# Omnissa-horizonagent-linux-x86_64-<release>-<version>.tar.gz) - nothing
+# in this project reads the files/ directory to auto-detect the current
+# tarball, so an old filename left here after staging a new one fails at
+# the horizon_agent role's "Copy the Horizon Agent tarball to the guest"
+# task with a plain file-not-found error, not anything more specific.
+horizon_agent_tarball: "/mnt/wdnfs/Ansible/horizon/Omnissa-horizonagent-linux-x86_64-2603-8.18.0-24278394073.tar.gz"
+
+
+# ---- NFS home directories ----
+nfs_server: ubt-fil-02.example.com
+nfs_export_path: /srv/home/hzubtp1
+
+# ---- Horizon pool publish (scripts/publish_to_pool.sh) ----
+# scripts/build.sh now calls publish_to_pool.sh itself at the end of a
+# successful build (see build.sh's own comments), so - unlike when this was
+# a separate, manually-run step - a missing or wrong value here CAN break a
+# normal build.sh run, right at the very last step. horizon_pool_name is
+# HZUBTP1_ref: a separate reference/staging pool (Machine Source: vCenter
+# instant clone, currently disabled in Horizon Console), not the live
+# HZUBTP1 production pool named elsewhere in this project and its blog post
+# - new images land here first for validation before anyone points the real
+# HZUBTP1 pool at them. The rest of these identify the Connection Server and
+# the account it authenticates the REST API calls as - see that script's own
+# header comment for what it needs from this account (a Horizon
+# administrator role covers it; it does not need to be an AD domain admin or
+# the same account as linux_domain_join_username above).
+#horizon_connection_server: "hzcs01.CHANGEME.example.com"     # <- REPLACE with your Connection Server's hostname
+#horizon_api_username: "svc_hz_api"        # <- REPLACE with your Horizon REST API account
+#horizon_api_domain: "CHANGEME.example.com"     # <- REPLACE with the AD domain that account authenticates against
+horizon_connection_server: "cs-srv-01.example.com"
+horizon_pool_name: HZUBTP1_ref
+horizon_api_username: "hz_admin"
+horizon_api_domain: "example.com"
+# The password half - vault_horizon_api_password - goes in
+# inventory/group_vars/all/vault.yml, same as vault_linux_domain_join_password
+# above: `ansible-vault edit inventory/group_vars/all/vault.yml` and add
+# `vault_horizon_api_password: "<password>"`.

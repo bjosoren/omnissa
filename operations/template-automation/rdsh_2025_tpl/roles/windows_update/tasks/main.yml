@@ -1,0 +1,78 @@
+---
+# roles/windows_update/tasks/main.yml
+# New - per Omnissa's own "Manually creating optimized Windows images for
+# Horizon VMs" guide (Update Windows / Install Windows updates), a full,
+# looped Windows Update pass - "run Windows Update again until no more
+# updates are available, and no restarts are required" - is a required
+# step between hypervisor tools and everything that follows (agents,
+# roles, features), not an optional nice-to-have.
+#
+# This project's own rdsh_2025_tpl.pkr.hcl and playbook.yml headers
+# previously called in-pipeline Windows Update out as deliberately
+# skipped ("applied manually/separately instead of adding a flaky
+# multi-pass update step"). That omission is the most likely real cause
+# of rds_role_install's "Error: 0x800f0922" hit on a real build:
+# RDS-RD-Server/.NET 4.x feature payload wasn't fully present in a
+# freshly installed, not-yet-serviced component store, so DISM fell back
+# to Windows Update - which the build network couldn't reach because this
+# step didn't exist yet, and 0x800f0922 is DISM/CBS's literal
+# "insufficient network connectivity" code. VLAN 12 (this build network)
+# does have internet access, confirmed, so this is addable for real now,
+# not just theoretically. Placed between vmware_tools and rds_role_install
+# to match the guide's own ordering exactly.
+#
+# round.yml originally called the Windows Update Agent COM API
+# (Microsoft.Update.Session) directly, to avoid a PSGallery/module-install
+# dependency on the third-party PSWindowsUpdate module. That worked for
+# $searcher.Search() but a real build failed at $session.CreateUpdateDownloader()
+# with "Access is denied (0x80070005)" - a documented WUA behavior, not a
+# transient fluke: the Windows Update Agent API refuses Download()/Install()
+# under a WinRM/PowerShell-remoting (network-logon) session even though
+# Search() on that same session is fine. ansible.windows.win_updates (built
+# into the ansible.windows collection, so still no PSGallery dependency) is
+# Ansible's own purpose-built answer to exactly this - its own docs say it
+# "will start a background process using the Task Scheduler on Windows" by
+# default specifically to get out of the network-logon context, with
+# become: runas/SYSTEM as its documented fallback if Task Scheduler isn't
+# available - both used in round.yml now. Retrying/looping the old raw-COM
+# script would never have worked here; this isn't a timing or retry problem.
+#
+# Bounded at 6 rounds (search+install, reboot if needed, repeat) rather
+# than looping forever - a fresh Windows Server 2025 install can
+# genuinely need several passes (servicing stack update, then the latest
+# cumulative update, then a .NET rollup, then Defender platform, etc.,
+# each only revealing the next on the restart after it), but this still
+# needs a ceiling. round.yml sets windows_update_clear so this loop stops
+# early once a round finds nothing left to do and nothing pending -
+# matching the guide's own success criterion - rather than always
+# running all 6 rounds regardless.
+#
+# This task's own name deliberately does NOT include {{ item }} - Ansible
+# renders an include_tasks loop's display name once before the loop's first
+# iteration binds item, which reliably produced a harmless but noisy
+# "'item' is undefined" template-error warning (confirmed on a real build).
+# round.yml's own per-round tasks already carry "({{ item }})" in their
+# names and rendered those correctly every time, so nothing is lost by
+# dropping it here.
+- name: "Windows Update round"
+  ansible.builtin.include_tasks: round.yml
+  loop: "{{ range(1, 7) | list }}"
+  loop_control:
+    loop_var: item
+    label: "{{ item }}/6"
+  when: windows_update_clear is not defined or not windows_update_clear
+
+- name: Fail if Windows Update still isn't clear after 6 rounds
+  ansible.builtin.fail:
+    msg: >-
+      Windows Update still has updates pending and/or a reboot pending
+      after 6 rounds - something is genuinely stuck rather than just
+      multi-wave updates settling (check VLAN 12 internet/WSUS reachability
+      from this VM specifically, and Windows Update's own error history via
+      Get-WindowsUpdateLog or Settings > Windows Update > Update history).
+      Console/WinRM into the VM and check manually before re-running.
+  when: windows_update_clear is not defined or not windows_update_clear
+
+- name: Show Windows Update settle result
+  ansible.builtin.debug:
+    msg: "Windows Update is fully settled - no updates pending, no reboot pending."

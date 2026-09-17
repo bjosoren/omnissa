@@ -1,0 +1,7 @@
+vcenter_server: vc-01.example.com
+vcenter_username: "{{ vault_vcenter_username }}"
+vcenter_password: "{{ vault_vcenter_password }}"
+vcenter_datacenter: Datacenter
+domain_fqdn: example.com
+domain_realm: EXAMPLE.COM
+ssh_private_key_file: ~/.ssh/golden_image_ed25519

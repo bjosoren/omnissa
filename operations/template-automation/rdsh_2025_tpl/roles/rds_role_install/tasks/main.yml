@@ -1,0 +1,107 @@
+---
+# roles/rds_role_install/tasks/main.yml
+# Adapted from the source guide's rdsh_05_install_horizon.yml (the RDS-role
+# half of it - see roles/horizon_agent for the agent-install half, split
+# into its own role here since they're two distinct concerns even though
+# the source guide's stage did both together). RDS-RD-Server must be
+# installed and the reboot it requires must have already happened before
+# horizon_agent runs, since the Horizon Agent installer auto-detects RDSH
+# mode from this role's presence rather than being told explicitly (see
+# horizon_agent's own comment on VDM_FORCE_DESKTOP_AGENT).
+#
+# .NET Framework 4.6.2+ is required by Horizon Agent's PerfTracker feature -
+# Windows Server 2025 ships .NET 4.8 but the feature has to be explicitly
+# enabled, it isn't on by default even though the bits are present.
+#
+# win_feature needs an explicit `source:` here. Without one, DISM first
+# checks the local WinSxS store and, for whichever of these three isn't
+# fully present there, silently falls back to Windows Update - which this
+# build VM can't reach (isolated provisioning network, no internet egress),
+# so the whole task dies with "Error: 0x800f0922" (DISM/CBS's code for
+# "could not complete due to insufficient network connectivity"). Confirmed
+# by an actual build failure at this exact task, not a hypothetical.
+#
+# First attempt at a fix: point source at the mounted Windows Server 2025
+# install ISO's own sources\sxs folder. That did NOT resolve it - a re-run
+# hit the identical 0x800f0922 with source: set. Confirmed why by Omnissa's
+# own "Manually creating optimized Windows images for Horizon VMs" guide:
+# sources\sxs is specifically the source for NetFx3 (.NET Framework 3.5) -
+# see that guide's own DISM /FeatureName:NetFx3 /Source:D:\sources\sxs
+# example - never RDS-RD-Server or the .NET 4.x features requested here.
+# So this really was aiming source: at the wrong thing.
+#
+# The real cause, per that same guide: a full looped Windows Update pass
+# is a required step between hypervisor tools and role/feature installs,
+# and this pipeline didn't have one (see playbook.yml's windows_update
+# role, now added right before this one runs). A pause task briefly lived
+# here for manual console/WinRM testing while chasing this blind - removed
+# now that there's an actual fix to test instead of more guessing. Left
+# source: below as-is (harmless even if not the right folder for these
+# features - DISM just won't find anything usable there and falls through
+# to its normal resolution) rather than re-litigating it further; revisit
+# only if 0x800f0922 recurs even after windows_update runs cleanly.
+- name: Locate Windows Server install media (for offline feature source)
+  ansible.windows.win_shell: |
+    $drive = Get-WmiObject Win32_CDROMDrive |
+        Where-Object { Test-Path ($_.Drive + '\sources\sxs') } |
+        Select-Object -First 1 -ExpandProperty Drive
+    if (-not $drive) {
+      throw "Could not find a mounted CD-ROM with sources\sxs - is the Windows Server install ISO still attached?"
+    }
+    Write-Output $drive
+  register: install_media
+  changed_when: false
+
+- name: Install RDS-RD-Server role and .NET Framework features
+  ansible.windows.win_feature:
+    name:
+      - RDS-RD-Server
+      - NET-Framework-45-Features
+      - NET-Framework-45-Core
+    state: present
+    include_management_tools: true
+    source: "{{ install_media.stdout | trim }}\\sources\\sxs"
+  register: features_install
+
+- name: Show feature install result
+  ansible.builtin.debug:
+    msg: "Reboot required after feature install: {{ features_install.reboot_required }}"
+
+- name: Reboot after RDS role and .NET Framework installation
+  ansible.windows.win_reboot:
+    reboot_timeout: 1800
+    post_reboot_delay: 60
+    msg: "Rebooting after RDS role and .NET Framework installation"
+  when: features_install.reboot_required
+
+- name: Verify RDS-RD-Server role is installed
+  ansible.windows.win_shell: |
+    $role = Get-WindowsFeature -Name RDS-RD-Server
+    if ($role.InstallState -eq 'Installed') {
+      Write-Output "RDS-RD-Server role is installed"
+    } else {
+      throw "RDS-RD-Server role is NOT installed - cannot proceed"
+    }
+  register: rds_verify
+  changed_when: false
+
+- name: Show RDS role verification result
+  ansible.builtin.debug:
+    msg: "{{ rds_verify.stdout }}"
+
+- name: Verify .NET 4.6.2+ is present
+  ansible.windows.win_shell: |
+    $release = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full" -ErrorAction SilentlyContinue).Release
+    if (-not $release) {
+      throw ".NET v4 Full registry key not found"
+    } elseif ($release -ge 394802) {
+      Write-Output ".NET OK - release key $release (4.6.2+)"
+    } else {
+      throw ".NET release key $release is below 4.6.2 (394802) - PerfTracker will fail to install"
+    }
+  register: dotnet_verify
+  changed_when: false
+
+- name: Show .NET verification result
+  ansible.builtin.debug:
+    msg: "{{ dotnet_verify.stdout }}"

@@ -1,0 +1,52 @@
+---
+# roles/dotnet35/tasks/main.yml
+# Enables .NET Framework 3.5 (NetFx3) from the mounted Windows Server
+# install media - per Omnissa's own "Manually creating optimized Windows
+# images for Horizon VMs" guide (DISM /Online /Enable-Feature
+# /FeatureName:NetFx3 /Source:D:\sources\sxs /All), and per the user's own
+# explicit 16-step sequence, step 3: "Install VMware Tools and .Net (add
+# reboot)". Positioned right after vmware_tools, before windows_update -
+# matches both the guide's own ordering and the step-3 grouping in the
+# user's list.
+#
+# Confidence note: unlike rds_role_install's NET-Framework-45-Features/
+# Core (a DIFFERENT .NET - installed later, needed for Horizon Agent's
+# PerfTracker feature, see that role's own header comment for why), nothing
+# in this project's real build history has actually hit a failure tied to
+# NetFx3 specifically being missing. This role exists because the guide and
+# the user's own sequence both call for it explicitly, not because a real
+# log pointed at it - flagging that distinction rather than presenting this
+# with the same confidence as the fixes that were driven by an actual error.
+- name: Locate Windows Server install media (for NetFx3 source)
+  ansible.windows.win_shell: |
+    $drive = Get-WmiObject Win32_CDROMDrive |
+        Where-Object { Test-Path ($_.Drive + '\sources\sxs') } |
+        Select-Object -First 1 -ExpandProperty Drive
+    if (-not $drive) {
+      throw "Could not find a mounted CD-ROM with sources\sxs - is the Windows Server install ISO still attached?"
+    }
+    Write-Output $drive
+  register: install_media
+  changed_when: false
+
+- name: Enable .NET Framework 3.5 (NetFx3)
+  ansible.windows.win_feature:
+    # NET-Framework-Core is the Windows Server feature name for ".NET
+    # Framework 3.5 (includes .NET 2.0 and 3.0)" - confirm with
+    # `Get-WindowsFeature -Name NET-Framework-Core` if this ever needs
+    # re-checking against a different Windows Server build.
+    name: NET-Framework-Core
+    state: present
+    source: "{{ install_media.stdout | trim }}\\sources\\sxs"
+  register: netfx3_install
+
+- name: Show NetFx3 install result
+  ansible.builtin.debug:
+    msg: "Reboot required after NetFx3 install: {{ netfx3_install.reboot_required }}"
+
+- name: Reboot after NetFx3 installation
+  ansible.windows.win_reboot:
+    reboot_timeout: 1800
+    post_reboot_delay: 60
+    msg: "Rebooting after NetFx3 installation"
+  when: netfx3_install.reboot_required

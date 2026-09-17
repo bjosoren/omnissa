@@ -1,0 +1,63 @@
+---
+# roles/dem/tasks/main.yml
+# Adapted from the source guide's rdsh_06_install_dem.yml. ADDLOCAL feature
+# list built from group_vars the same way roles/horizon_agent does.
+- name: Build DEM ADDLOCAL feature list
+  ansible.builtin.set_fact:
+    dem_addlocal: >-
+      {{
+        ((['FlexEngine'] if dem_flex_engine else [])
+        + (['FlexMigrate'] if dem_flex_migrate else [])
+        + (['FlexProfilesSelfSupport'] if dem_self_support else [])
+        + (['FlexManagementConsole'] if dem_mgmt_console else [])
+        ) | join(',')
+      }}
+
+- name: Show ADDLOCAL string
+  ansible.builtin.debug:
+    msg: "ADDLOCAL={{ dem_addlocal }}"
+
+- name: Copy DEM installer to VM
+  # dem_agent_installer is an absolute NFS mount path, not relative to this
+  # image dir - see roles/horizon_agent's same comment.
+  ansible.windows.win_copy:
+    src: "{{ dem_agent_installer }}"
+    dest: "C:\\Temp\\{{ dem_agent_installer | basename }}"
+
+- name: Install DEM
+  ansible.windows.win_package:
+    path: "C:\\Temp\\{{ dem_agent_installer | basename }}"
+    arguments: >-
+      /qn
+      REBOOT=ReallySuppress
+      ADDLOCAL={{ dem_addlocal }}
+      {% if dem_integration_enabled | bool %}INTEGRATION=1{% endif %}
+      {% if dem_noad_config | length > 0 %}NOADCONFIGFILE="{{ dem_noad_config }}"{% endif %}
+      {% if dem_comp_env_config | length > 0 %}COMPENVCONFIGFILEPATH="{{ dem_comp_env_config }}"{% endif %}
+      {% if build_log_enabled | bool %}/log {{ build_log_dir }}\dem_install.log{% endif %}
+    state: present
+    expected_return_code: [0, 3010, 1641]
+  register: dem_install
+
+- name: Reboot after DEM install
+  ansible.windows.win_reboot:
+    reboot_timeout: 300
+    post_reboot_delay: 30
+    msg: "Rebooting after DEM installation"
+
+- name: Verify DEM installed
+  ansible.windows.win_shell: |
+    $dem = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
+      Where-Object { $_.DisplayName -like "*Dynamic Environment Manager*" } |
+      Select-Object -First 1
+    if ($dem) {
+      Write-Output "DEM installed: $($dem.DisplayName) $($dem.DisplayVersion)"
+    } else {
+      throw "DEM not found in registry"
+    }
+  register: dem_verify
+  changed_when: false
+
+- name: Show installation result
+  ansible.builtin.debug:
+    msg: "{{ dem_verify.stdout }}"

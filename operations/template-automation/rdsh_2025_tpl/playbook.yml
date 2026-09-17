@@ -1,0 +1,193 @@
+---
+# playbook.yml
+# Run by Packer's ansible provisioner against the freshly autoinstalled VM,
+# same single-playbook-one-pass structure as images/ubt_2404_tpl/playbook.yml.
+# Each role is adapted from the corresponding stage in the Omnissa Community
+# guide this was built from - the comment on each role says which stage it
+# replaces. See rdsh_2025_tpl.pkr.hcl's header comment for why this is ONE
+# playbook run once (mid-playbook reboots handled by ansible.windows.win_reboot,
+# and - new as of this rewrite - ansible.builtin.wait_for_connection for
+# osot_generalize's Sysprep-triggered reboot) rather than the guide's own
+# separate power-on/run-stage/power-off/repeat orchestration outside Packer,
+# and for why there is deliberately NO domain_join role here (Horizon Instant
+# Clone joins each spawned RDSH host to the domain per-clone, not on the
+# golden image).
+#
+# REWRITTEN 2026-09-11, per the user's explicit request (having reviewed
+# Omnissa's "Using Automation to Create Optimized Windows Images for Horizon
+# VMs" and "Manually creating optimized Windows images for Horizon VMs"
+# PDFs) to add the OS Optimization Tool (OSOT) Optimize/Generalize/Finalize
+# passes and Store-app cleanup this pipeline was missing, and to reorder
+# agent installs around them. The role list below replaces this file's own
+# previous version, which explicitly called OSOT out as NOT included
+# ("previously a known blocker on this platform") - see roles/osot_optimize's
+# own header for why driving OSOT via its documented CLI (rather than the
+# GUI that actually hung under WinRM) resolves that, not a blind retry of it.
+#
+# The user's own stated sequence was: 1. Create VM, 2. Install OS, 3. VMware
+# Tools + .Net (reboot), 4. Windows Updates (reboot), 5. Install Apps
+# (reboot), 6. OSOT Optimize (reboot), 7. OSOT Generalize (reboot), 8. OSOT
+# Optimize (reboot) again, 9. Clean Store Apps (reboot), 10. Horizon Agent
+# (reboot), 11. DEM Agent, 12. GPU Drivers (optional), 13. App Volumes
+# Agent, 14. Shutdown, 15. Clone and Snapshot, 16. Publish to farm/pool.
+# Two corrections applied below, both flagged back to the user rather than
+# silently changed:
+#   - Step 8's second "OSOT Optimize" pass was dropped: Omnissa's own guide
+#     and the MDT task sequence it documents both show Optimize running
+#     ONCE, then Generalize ONCE, then remaining agent installs, then
+#     Finalize ONCE - never a second Optimize pass after Generalize. Running
+#     Optimize again post-Sysprep would also be fighting against
+#     osot_generalize's own answer-file customizations for no documented
+#     benefit.
+#   - "OSOT Finalize" isn't named as its own numbered step in the user's
+#     list, but both PDFs and the MDT sequence they document treat it as the
+#     required third OSOT stage (after all agents, right before shutdown) -
+#     see roles/osot_finalize for the placement rationale. Steps 14-16
+#     (Shutdown, Clone and Snapshot, Publish to farm/pool) are NOT part of
+#     this playbook - shutdown is Packer's own shutdown_command below cleanup,
+#     and clone/snapshot + publish are scripts/build.sh and
+#     scripts/publish_to_pool.sh, already covering those two steps.
+#
+# rds_role_install (RDS-RD-Server role + .NET 4.x features for Horizon
+# Agent's PerfTracker - a DIFFERENT .NET than dotnet35's NetFx3, see that
+# role's own header) is now positioned right before horizon_agent rather
+# than immediately after windows_update - horizon_agent's installer
+# auto-detects RDSH mode from RDS-RD-Server's presence, so rds_role_install
+# only needs to run BEFORE horizon_agent, not immediately after
+# windows_update; moving it lets osot_optimize/osot_generalize/
+# store_apps_cleanup run against a cleaner, not-yet-RDSH-role-added image,
+# matching the OSOT guides' own ordering. windows_update must still run
+# before rds_role_install either way - see that role's own header for the
+# real 0x800f0922 failure that requirement traces back to; nothing about
+# this reordering changes that constraint.
+#
+# windows_update is RE-ENABLED below (previously commented out to isolate a
+# separate KB5122871 update-loop problem while other fixes were being
+# tested) - it's a named, required step in the user's own sequence (step 4)
+# and in Omnissa's guide. The KB5122871 loop issue was never confirmed
+# fixed; see roles/windows_update/tasks/round.yml's own header for the
+# reject_list mechanism to use if it resurfaces on a real run.
+#
+# It's gated by enable_windows_update (inventory/group_vars/
+# rdsh_2025_tpl.yml, default true) rather than commented out again, so a
+# quick verification run of everything else added in this rewrite
+# (dotnet35 / osot_optimize / osot_generalize / store_apps_cleanup /
+# osot_finalize / the reordering itself) doesn't have to sit through it -
+# see that group_vars entry's own comment for the tradeoff (rds_role_install
+# may hit 0x800f0922 again with it off).
+#
+# GPU Drivers (the user's own step 12) has no role here - marked "Optional"
+# in the user's list, and there's no driver package/silent-install command
+# line to build one from. Documented here as consciously skipped, not
+# silently dropped - add a role once you have a specific GPU driver
+# installer to stage.
+#
+# CORRECTED 2026-09-11 (osot_generalize) against Omnissa's own "Command
+# Line Operations" PDF for OSOT: Generalize (-g) requires Windows already
+# be in Audit Mode. Also fixed same day: osot_finalize was passing an
+# undocumented -r/report-file argument to -f (that flag only exists for
+# -optimize per the same PDF) - removed.
+#
+# RESTRUCTURED 2026-09-13: enter_audit_mode (sysprep /audit /reboot, plus
+# a manual pause) now runs right after vmware_tools, BEFORE dotnet35/
+# windows_update/apps/osot_optimize, rather than being folded into
+# osot_generalize right before its own -g call (an earlier pass at this
+# same day's rewrite put it immediately before osot_optimize only, one
+# role later than here - moved one step earlier again after reviewing
+# Omnissa's "Manually creating optimized Windows images for Horizon VMs"
+# PDF end to end). Reasons: (1) a real build hung inside osot_optimize's
+# own -o call with no clear diagnosis, and rather than keep guessing at
+# OSOT's CLI behavior blind and burning ~20-minute cycles per guess, the
+# user wants to interactively drive OSOT from the vCenter console and
+# observe what actually happens - which needs Audit Mode, and needs to
+# happen before Optimize runs, not just before Generalize; (2) that PDF's
+# own step order (its page 5 diagram, and the body of the guide) enters
+# audit mode immediately after Windows install, BEFORE "Install hypervisor
+# tools and drivers", and only then proceeds through Update Windows /
+# Install applications / Optimize / Generalize - i.e. audit mode is meant
+# to span hypervisor-tools-through-Optimize, not just Optimize alone. This
+# pipeline can't enter audit mode before vmware_tools the way the guide
+# does, because VMware Tools here is actually installed by
+# autounattend.pkrtpl.hcl during the specialize pass, before OOBE ever
+# completes - the vmware_tools role itself just confirms that install
+# landed and settles any pending reboot, it doesn't drive the install.
+# Right after vmware_tools is therefore the closest this architecture can
+# get to the guide's "before hypervisor tools" placement, and it now also
+# matches the guide by keeping dotnet35/windows_update/apps inside Audit
+# Mode alongside osot_optimize, not just the last of the four.
+# Architecturally this is also closer to how MDT's own LiteTouch process
+# really works (enter Audit Mode once, early, run everything else inside
+# it, only exit via the final generalize) than the narrower designs this
+# replaces - see roles/enter_audit_mode's own header for the full
+# explanation, including why the recurring Sysprep "Cancel" dialog the PDF
+# documents for every audit-mode reboot (its page 18) doesn't block any of
+# these roles' own WinRM-driven reboots. This doesn't change the user's
+# earlier "reseal to full OOBE with autologon" decision, which is about
+# what -g reseals TO, not this separate precondition for invoking it.
+#
+# SUPERSEDED IN PART 2026-09-16: the paragraph above describes
+# enter_audit_mode itself TRIGGERING `sysprep /audit /reboot` mid-pipeline,
+# after a full OOBE-based first boot. That is no longer how Audit Mode is
+# entered - per Omnissa's "Manually creating optimized Windows images for
+# Horizon VMs" PDF ("Enter audit mode", page 16, which states this applies
+# to both Windows 11 and RDSH/Server images) and Microsoft's own "Boot
+# Windows to Audit Mode or OOBE" / "auditSystem" Learn pages, Audit Mode is
+# now entered automatically during Windows install itself, via
+# floppy/autounattend.pkrtpl.hcl's own oobeSystem pass
+# (Microsoft-Windows-Deployment/Reseal/Mode=Audit) - the guest boots
+# straight into Audit Mode on its very first boot, before OOBE (and before
+# Ansible's own "Gathering Facts") ever runs. roles/enter_audit_mode now
+# only VERIFIES this landed (a registry ImageState check) and fails fast
+# with a clear message if it didn't, rather than driving the transition
+# itself - see that role's own header for the full rationale and citations.
+# Its POSITION in the role list below (right after vmware_tools, before
+# dotnet35/windows_update/apps/osot_optimize) is unchanged and for the same
+# reason as before: everything from vmware_tools' own reboot-settling loop
+# through osot_optimize still needs to run, and does run, inside Audit
+# Mode - only WHO puts the guest into Audit Mode, and WHEN, changed.
+#
+# SPLIT 2026-09-16: OSOT Finalize (the user's own header note above already
+# flags it as "required by both PDFs" but not a numbered user step) is now
+# TWO passes instead of one, per the user's explicit request made while
+# watching a real build's single Finalize pass run near the end of the
+# pipeline. roles/osot_finalize_cleanup (jobs 0-7: disk/profile/log
+# housekeeping, including the potentially long-running "zero empty disk
+# space" SDelete64.exe job) now runs BEFORE appvolumes, and waits for
+# SDelete64.exe to genuinely finish (not just for OSOT's own process to
+# exit) before letting the play continue - see that role's own header. The
+# existing roles/osot_finalize (jobs 9-10: KMS/DNS reset) keeps its
+# original position, after appvolumes and right before hardening/cleanup -
+# see that role's own header for why job 9 in particular is flagged as a
+# reversal of an earlier explicit decision, not a silent change. Job 11
+# ("Release IP Address") was ALSO originally split into this second pass but
+# REMOVED the same day, before ever shipping in a real build - a build
+# still on the pre-split code failed with a WinRM ConnectTimeoutError right
+# where job 11 would run, and since rdsh_2025_tpl.pkr.hcl's own
+# communicator = "winrm" means Packer's OWN shutdown_command rides that same
+# channel right after this role, the risk wasn't confined to just this one
+# Ansible task - see roles/osot_finalize's own header for the full
+# diagnosis and the user's explicit choice to drop it rather than risk
+# another failed build cycle on an undocumented Packer/WinRM interaction.
+- name: Build the Windows Server 2025 Omnissa Horizon RDSH golden image
+  hosts: all
+  gather_facts: true
+  roles:
+    - role: base              # Prep - temp/log dirs, sanity checks
+    - role: vmware_tools       # Confirm the autounattend-driven VMware Tools install landed, settle any pending reboot
+    - role: enter_audit_mode   # VERIFIES Audit Mode (entered automatically during install via floppy/autounattend.pkrtpl.hcl's own oobeSystem Reseal/Mode=Audit, REWRITTEN 2026-09-16 - see role header) - its own manual pause was removed 2026-09-15; osot_generalize's pre-Generalize pause below is now the sole manual checkpoint
+    - role: dotnet35           # NetFx3 (.NET 3.5) from install media - user's step 3, grouped with VMware Tools (now runs inside Audit Mode)
+    - role: windows_update     # Full looped Windows Update pass - user's step 4 (RE-ENABLED, see header above) (now runs inside Audit Mode)
+      when: enable_windows_update | default(true) | bool
+    - role: apps               # NFS-drop-folder-pattern optional extra apps - user's step 5 (now runs inside Audit Mode)
+    - role: osot_optimize      # OSOT Optimize pass - user's step 6 (runs inside Audit Mode)
+    - role: osot_generalize    # MANUAL PAUSE for pre-Generalize review, then OSOT Generalize (Sysprep) + reconnect - user's step 7 (exits Audit Mode) - see role header
+    - role: store_apps_cleanup # Remove Copilot/Bing Search Store apps - user's step 9 (step 8's duplicate Optimize dropped, see header)
+    - role: rds_role_install   # RDS-RD-Server role + .NET 4.x features, reboot, verify - repositioned, must run before horizon_agent
+    - role: horizon_agent      # Horizon Agent install in RDSH mode, reboot, verify - user's step 10
+    - role: dem                # Omnissa Dynamic Environment Manager, reboot, verify - user's step 11
+    # GPU Drivers - Optional (user's step 12) - no role, see header above
+    - role: osot_finalize_cleanup # OSOT Finalize pass 1/2 (disk/profile/log cleanup jobs 0-7, waits for SDelete64.exe to finish) - NEW 2026-09-16, runs BEFORE App Volumes per the user's explicit request, see role header
+    - role: appvolumes         # Omnissa App Volumes Agent, reboot, verify - user's step 13
+    - role: osot_finalize      # OSOT Finalize pass 2/2 (network/licensing jobs 9-10; job 11 "Release IP" dropped, see role header) - not a numbered user step, but required by both PDFs, see header above - SPLIT 2026-09-16, see role header
+    - role: hardening          # RDS licensing mode + Remote Desktop Users group (documentation-only, see role header)
+    - role: cleanup            # Clear C:\Temp; Packer's shutdown_command (user's step 14) powers off after this

@@ -1,0 +1,23 @@
+---
+# roles/base/tasks/main.yml
+# Prep work every later role depends on - adapted from the "Prep" section
+# repeated at the top of every rdsh_0X_*.yml stage in the source guide
+# (Create temp directory / Create log directory), consolidated into one
+# role here since this project runs as one playbook pass rather than
+# separate per-stage runs.
+- name: Show target VM info
+  ansible.builtin.debug:
+    msg:
+      - "Host: {{ ansible_hostname }}"
+      - "OS  : {{ ansible_os_name | default('unknown') }}"
+
+- name: Create C:\Temp for installer staging
+  ansible.windows.win_file:
+    path: C:\Temp
+    state: directory
+
+- name: Create build log directory
+  ansible.windows.win_file:
+    path: "{{ build_log_dir }}"
+    state: directory
+  when: build_log_enabled | bool

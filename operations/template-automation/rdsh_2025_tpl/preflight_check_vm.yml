@@ -1,0 +1,28 @@
+---
+# preflight_check_vm.yml
+# Identical in every functional respect to images/ubt_2404_tpl/preflight_check_vm.yml -
+# this only ever talks to the vCenter API (vmware_vm_info), never the guest
+# OS, so nothing here needs to change between a Linux and a Windows image.
+# See that file's header comment for the full explanation of why this
+# exists and why vmware_vm_info (not vmware_guest_info) is used.
+- name: Check whether the build VM already exists
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: List VMs in the target folder
+      community.vmware.vmware_vm_info:
+        hostname: "{{ vcenter_server }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+        folder: "/{{ vcenter_datacenter }}/vm/{{ vcenter_folder }}"
+      register: vm_list
+    - name: Determine whether {{ vm_name }} is among them
+      ansible.builtin.set_fact:
+        vm_already_exists: "{{ (vm_list.virtual_machines | selectattr('guest_name', 'equalto', vm_name) | list | length) > 0 }}"
+    - name: Write the result for build.sh to read
+      ansible.builtin.copy:
+        dest: "{{ check_result_file }}"
+        content: "{{ {'exists': vm_already_exists} | to_nice_json }}"
+        mode: '0600'

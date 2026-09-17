@@ -1,0 +1,129 @@
+---
+# roles/vmware_tools/tasks/main.yml
+# Unlike ubt_2404_tpl (which installs open-vm-tools-desktop via apt inside
+# its own vmware_tools role), VMware Tools for this image is already
+# installed by floppy/windows-vmtools.ps1, invoked from
+# floppy/autounattend.pkrtpl.hcl, before Ansible ever connects - see
+# rdsh_2025_tpl.pkr.hcl's floppy_content comment. This role just confirms
+# that actually landed, rather than re-installing it.
+#
+# UPDATED 2026-09-16: the windows-vmtools.ps1 invocation moved from the
+# oobeSystem pass's FirstLogonCommands to the auditUser pass's
+# RunSynchronous block (Orders 14-15), as part of moving Audit Mode entry
+# to happen automatically during install itself (Microsoft-Windows-Deployment/
+# Reseal/Mode=Audit in oobeSystem - see roles/enter_audit_mode's own header
+# for the full rationale and citations). oobeSystem's own role now is just
+# to trigger that Reseal; it no longer carries FirstLogonCommands at all.
+# windows-vmtools.ps1 itself needed no changes to run from the new location -
+# confirmed it has no OOBE-specific assumptions (plain WMI CD-ROM detection +
+# a silent MSI install), so it runs identically from either pass. This role's
+# own verification logic below (VMTools service check) is unaffected either
+# way - it doesn't care which pass installed the service, only that it's
+# there by the time this role runs.
+- name: Verify VMware Tools service is present and running
+  ansible.windows.win_service_info:
+    name: VMTools
+  register: vmtools_service
+
+- name: Fail if VMware Tools did not install
+  ansible.builtin.fail:
+    msg: >-
+      VMTools service not found - floppy/windows-vmtools.ps1 either didn't
+      run or didn't find the Tools ISO during FirstLogonCommands. Check that
+      iso_paths[1] in rdsh_2025_tpl.pkr.hcl actually resolved to a valid
+      tools ISO on this ESXi host before re-running.
+  when: vmtools_service.exists is not defined or not vmtools_service.exists
+
+- name: Show VMware Tools service state
+  ansible.builtin.debug:
+    msg: "VMTools service state: {{ vmtools_service.services[0].state | default('unknown') }}"
+
+# windows-vmtools.ps1 installs with REBOOT=ReallySuppress (see that script's
+# own header comment), which deliberately suppresses the reboot the VMware
+# Tools MSI would otherwise trigger for its driver install. Nothing before
+# this point in the play ever performs that suppressed reboot - and a real
+# build hit the consequence of that head-on: rds_role_install's feature
+# install failed with "Error: 0x800f0922", and manually checking the VM
+# over WinRM confirmed
+# HKLM:\...\Component Based Servicing\RebootPending = True at that point,
+# with TiWorker.exe visibly churning and Get-WindowsFeature itself hanging
+# at "Collecting data..." - CBS refusing/struggling to do new feature work
+# while an earlier servicing operation sits unfinalized. Console confirmed
+# the reboot genuinely needed to happen ("Updates are underway. Please keep
+# your computer on.").
+#
+# This can legitimately take more than one restart - a fresh unattended
+# install plus VMware Tools' own driver work can leave more than one wave
+# of servicing to finalize, each only revealing the next on the restart
+# after it. So this checks-and-reboots in a bounded loop (4 rounds) rather
+# than a single unconditional win_reboot, and fails loudly at the end
+# rather than silently letting rds_role_install run into the same
+# confusing 0x800f0922 again if something never actually settles.
+- name: "Check for pending reboot after VMware Tools install (round 1/4)"
+  ansible.windows.win_shell: |
+    $cbs = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'
+    $wu  = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
+    if ($cbs -or $wu) { 'pending' } else { 'clear' }
+  register: reboot_check_1
+  changed_when: false
+
+- name: "Reboot to settle pending servicing state (round 1/4)"
+  ansible.windows.win_reboot:
+    reboot_timeout: 1800
+    post_reboot_delay: 90
+    msg: "Rebooting to settle pending servicing state after VMware Tools install"
+  when: reboot_check_1.stdout | trim == 'pending'
+
+- name: "Check for pending reboot after VMware Tools install (round 2/4)"
+  ansible.windows.win_shell: |
+    $cbs = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'
+    $wu  = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
+    if ($cbs -or $wu) { 'pending' } else { 'clear' }
+  register: reboot_check_2
+  changed_when: false
+  when: reboot_check_1.stdout | trim == 'pending'
+
+- name: "Reboot to settle pending servicing state (round 2/4)"
+  ansible.windows.win_reboot:
+    reboot_timeout: 1800
+    post_reboot_delay: 90
+    msg: "Rebooting to settle pending servicing state after VMware Tools install"
+  when: reboot_check_2.stdout is defined and reboot_check_2.stdout | trim == 'pending'
+
+- name: "Check for pending reboot after VMware Tools install (round 3/4)"
+  ansible.windows.win_shell: |
+    $cbs = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'
+    $wu  = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
+    if ($cbs -or $wu) { 'pending' } else { 'clear' }
+  register: reboot_check_3
+  changed_when: false
+  when: reboot_check_2.stdout is defined and reboot_check_2.stdout | trim == 'pending'
+
+- name: "Reboot to settle pending servicing state (round 3/4)"
+  ansible.windows.win_reboot:
+    reboot_timeout: 1800
+    post_reboot_delay: 90
+    msg: "Rebooting to settle pending servicing state after VMware Tools install"
+  when: reboot_check_3.stdout is defined and reboot_check_3.stdout | trim == 'pending'
+
+- name: "Final pending-reboot check after VMware Tools install (round 4/4)"
+  ansible.windows.win_shell: |
+    $cbs = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'
+    $wu  = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
+    if ($cbs -or $wu) { 'pending' } else { 'clear' }
+  register: reboot_check_4
+  changed_when: false
+
+- name: Fail if still pending after 4 rounds of rebooting
+  ansible.builtin.fail:
+    msg: >-
+      Still shows a pending reboot after 4 rounds - something is genuinely
+      stuck (not just multi-wave servicing settling), rather than continue
+      into rds_role_install and risk the same confusing 0x800f0922 failure
+      again. Console into the VM and check CBS.log / TiWorker.exe by hand
+      before re-running.
+  when: reboot_check_4.stdout | trim == 'pending'
+
+- name: Show pending-reboot settle result
+  ansible.builtin.debug:
+    msg: "Pending reboot state after VMware Tools install: {{ reboot_check_4.stdout | trim }}"

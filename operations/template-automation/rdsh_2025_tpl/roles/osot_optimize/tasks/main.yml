@@ -1,0 +1,440 @@
+---
+# roles/osot_optimize/tasks/main.yml
+# Omnissa Windows OS Optimization Tool (OSOT) - Optimize pass. Driven via
+# OSOT's own documented CLI (Omnissa docs: "Run Windows OS Optimization
+# Tool for Horizon from Command Line") rather than the GUI, so this stays
+# scriptable under Packer's ansible provisioner like every other role here.
+#
+# This corrects rdsh_2025_tpl.pkr.hcl's own previous header note calling
+# OSOT "a known, previously-unresolved blocker on this exact platform...
+# hangs under Packer's WinRM provisioner due to window-station
+# restrictions" - that note described the GUI (a WPF app needing an
+# interactive desktop/window station, which a non-interactive WinRM session
+# genuinely doesn't have). The documented CLI switches used below run
+# headless by design specifically to avoid that - this isn't a new blind
+# attempt at the thing that hung before, it's the documented way around it.
+#
+# Added 2026-09-11 per the user's explicit request to restructure this
+# pipeline around Omnissa's "Using Automation to Create Optimized Windows
+# Images for Horizon VMs" / "Manually creating optimized Windows images for
+# Horizon VMs" guides. Placement in playbook.yml: after windows_update +
+# apps, before osot_generalize - matches both PDFs' sequence, since
+# Optimize is meant to tune/disable services and scheduled tasks that would
+# otherwise fight with whatever Windows Update and your own apps just
+# installed.
+#
+# osot_installer (inventory/group_vars/rdsh_2025_tpl.yml) is confirmed -
+# see that file's own comment.
+#
+# osot_template / the -t argument: REMOVED 2026-09-11 after a real build
+# failed to load it - "File not found: Omnissa\Windows 10, 11 and Server
+# 2022, 2025.xml". Worth revisiting: the Omnissa Community's own
+# "Horizon Gold Image creation with Ansible" guide (community.omnissa.com,
+# topic 72927) passes -t "Omnissa Templates\Windows 10, 11 and Server 2022,
+# 2025" - note "Omnissa Templates\", not "Omnissa\" - a different prefix
+# than what failed here. Not re-adding -t yet (not worth changing two
+# things in the same test), but if -t is wanted later, that's the string to
+# try. Still omitting it relies on the documented default-template
+# fallback, unchanged.
+#
+# INVOCATION REWRITTEN 2026-09-15 (third and hopefully final rewrite today)
+# after real-build testing worked through three failed approaches in a row:
+#   1. Plain synchronous win_shell -> hung (WinRM's own operation/read
+#      timeout cutting off a long command - ansible/ansible #81095).
+#   2. async/poll:0 + async_status, Start-Process -NoNewWindow -PassThru,
+#      plus become:true/runas/SYSTEM (added after the OSOT process was
+#      observed cycling - start/disappear/reappear - in Task Manager) ->
+#      become fixed the cycling (a real WinRM network-logon restriction,
+#      per Ansible's own docs: "All processes run under WinRM are in a
+#      non-interactive session"), but the user then confirmed live,
+#      (Get-Process -Id <pid>).SessionId returned 0 - SYSTEM without an
+#      existing interactive logon lands in Windows' permanently
+#      non-interactive Session 0, which has no window station for anything
+#      to draw on. OSOT tries to show an "Omnissa General Terms" EULA
+#      dialog there and just sits, forever, with nowhere to render it -
+#      confirmed by Omnissa's own automation guide independently
+#      documenting that dialog as a real, undocumented-for-silent-bypass
+#      interactive step.
+#   3. A Scheduled Task registered with LogonType=Interactive against the
+#      Administrator account already auto-logged into the real console
+#      (Session 1, via Audit Mode's own auto-logon) -> registered fine, but
+#      left permanently State=Queued and never actually launched, CONFIRMED
+#      on a real build both triggered remotely over WinRM AND triggered
+#      manually by the user physically at that same unlocked, actively-used
+#      console session. Not a WinRM-specific problem - this specific
+#      mechanism just doesn't reliably work in this environment. A PsExec
+#      -i (session-inject) attempt was half-built to replace it before the
+#      user surfaced something better.
+#
+# The user then pointed at the Omnissa Community's own "Horizon Gold Image
+# creation with Ansible" guide (community.omnissa.com, topic 72927 -
+# already the source this project's rdsh_2025_tpl.pkr.hcl cites for the
+# winrm_transport=ntlm fix), which runs OSOT Optimize successfully with
+# none of the above: no become, no Scheduled Task, no PsExec, and -
+# notably - not inside Windows Audit Mode at all (its own pipeline never
+# enters Audit Mode; it defers Sysprep generalization to a Horizon vCenter
+# Customization Spec at clone time instead, a different golden-image
+# strategy than this project's own explicit choice to self-generalize via
+# OSOT's own -g - see roles/osot_generalize's header for that standing
+# decision, which is NOT being revisited here). Its actual OSOT invocation:
+#   Start-Process "C:\Temp\<osot.exe>" -ArgumentList $arglist -Verb RunAs -Wait
+#   exit $LASTEXITCODE
+#   failed_when: rc not in [0, 3010]
+# Two concrete, adoptable differences from what this file was doing:
+#   - -Verb RunAs (ShellExecute-based elevation) instead of -NoNewWindow.
+#     These are mutually exclusive in Start-Process (-Verb RunAs can't
+#     combine with -NoNewWindow at all - PowerShell errors if you try), so
+#     this is a real fork in the road, not a tweak. -NoNewWindow was
+#     originally chosen on the theory that Start-Process's default new-
+#     window behavior needs a window station a WinRM session doesn't have
+#     (see this file's OLD header, now superseded) - but per everything
+#     learned in points 2-3 above, that theory doesn't hold up (SYSTEM in
+#     Session 0 had no window station regardless of -NoNewWindow, and a
+#     genuinely interactive Session 1 still couldn't actually get a
+#     process into it via Scheduled Tasks). Untested until now: whether
+#     -Verb RunAs's ShellExecute-based elevation path behaves differently
+#     for OSOT's own internal EULA/first-run check than -NoNewWindow does -
+#     unproven in theory, proven in practice by this guide's own working
+#     pipeline, so adopting it rather than continuing to theorize.
+#   - 3010 (ERROR_SUCCESS_REBOOT_REQUIRED) accepted as success alongside 0 -
+#     a legitimate Windows convention this file's own exit-code check was
+#     missing.
+# NOT adopted from that guide: -v (verbose) - Omnissa's own KB 94531
+# explicitly documents "-o ... -v" hanging at "Loading Templates"
+# specifically when automated via Packer ("will function interactively,
+# however will not function via Packer") - the guide's own pipeline isn't
+# Packer-based (plain ansible-playbook against a running VM via dynamic
+# inventory), this project's is, so that specific warning applies here and
+# doesn't there. Also NOT adopted: the guide's own $LASTEXITCODE check
+# after Start-Process, which (per Microsoft's own Start-Process docs,
+# already confirmed earlier in this project) doesn't actually get set by
+# Start-Process at all - only -PassThru's returned process object's own
+# ExitCode property does. run_osot_optimize.ps1.j2 keeps this project's
+# own already-correct -PassThru/.ExitCode pattern instead, just swaps
+# -NoNewWindow for -Verb RunAs.
+#
+# Also reverted: become:true/runas/SYSTEM is gone. Plain WinRM-connected
+# Administrator (this pipeline's own standing connection account) is what
+# the working guide uses too, and SYSTEM's own Session-0 problem no longer
+# applies once nothing is deliberately becoming SYSTEM.
+#
+# Left AS-IS deliberately for this test: osot_optimize still runs inside
+# Windows Audit Mode, at its current place in playbook.yml (unchanged since
+# 2026-09-13/14 - see roles/enter_audit_mode's own header). The working
+# guide never uses Audit Mode at all, which makes it a confound, not
+# proof, that Audit Mode itself was ever the problem - changing the
+# invocation technique alone (this edit) isolates that variable from
+# Audit Mode's placement.
+#
+# RESULT of that test, 2026-09-15: -Verb RunAs was a real, substantial
+# step forward, NOT a dead end - confirmed on a real build via
+# Task Manager (osot.exe/PID present and Running the whole time, still
+# Session 0, still Administrator, no become), Task Scheduler (no
+# Omnissa\OptimizationToolTask entries left - they ran and were cleaned up,
+# same as the original fully-successful interactive test), a FULL
+# Optimize_*.log (hundreds of real optimization actions logged, ending in
+# an "htmlReport:" line - not the single-line stub the become/SYSTEM
+# attempt produced), and a reopened OSOT GUI Analyze pass showing 496/494
+# applied - directly comparable to the original successful test's 495/493.
+# So Session 0 was NEVER actually the blocker for THIS identity - the
+# earlier become/SYSTEM failure was most likely EULA/first-run state being
+# per-identity (SYSTEM had never run osot.exe before and had nothing to
+# render a first-run dialog on; Administrator already had that settled
+# from the very first interactive test earlier this session and needed no
+# dialog at all this time, Session 0 or not).
+#
+# STILL OPEN, this same test run: the pipeline itself stayed stuck at
+# "Wait for OSOT Optimize pass to finish" well after the real work was
+# already done per the evidence above - i.e. Start-Process -Verb RunAs
+# -Wait in run_osot_optimize.ps1.j2 did not actually return once osot.exe
+# finished. Not yet root-caused with full certainty (candidates: OSOT's own
+# process simply not self-terminating after -o completes - the ORIGINAL
+# successful interactive test also needed the user to manually reopen OSOT
+# afterward to check Analyze results, consistent with the process/GUI
+# staying resident rather than exiting; or -Verb RunAs's own -Wait being
+# unreliable across UAC's elevation handoff, a documented general
+# PowerShell quirk independent of this specific tool).
+#
+# FIRST FIX ATTEMPT (superseded, see below): dropped -Wait and had
+# run_osot_optimize.ps1.j2 itself poll its own Optimize_*.log in a while
+# loop, stopping the process once found. On the next real build: confirmed
+# via the user's own direct check that the Optimize_*.log genuinely DID
+# contain the htmlReport: completion line, and osot.exe was genuinely gone
+# from Task Manager - the work was done, cleanly, a second time - but the
+# pipeline STILL stayed stuck at "Wait for OSOT Optimize pass to finish".
+# So the actual bug isn't the detection target (htmlReport: is real and
+# correct) - it's trusting ONE long-lived async-wrapped background
+# PowerShell script (our own inner poll loop, sitting in Start-Sleep for
+# however long OSOT takes) to reliably report itself finished back to
+# Ansible's async_status. Something about that specific arrangement isn't
+# working, and chasing exactly why isn't worth another 20-minute build
+# cycle when a more robust pattern already exists elsewhere in this same
+# pipeline.
+#
+# CURRENT FIX: stop trying to detect completion from inside one script
+# Ansible has to track as a single opaque background job. Instead:
+# "Start OSOT Optimize pass (async)" launches OSOT (Start-Process, no
+# -Wait) and dispatches it via async: 3600 / poll: 0 - STILL async, and
+# for a DIFFERENT reason than the original design's own WinRM-operation-
+# timeout rationale (ansible/ansible #81095): Windows ties every WinRM-
+# spawned process, even a detached elevated one, to a Job Object that gets
+# killed the instant this task's own command returns, unless something
+# breaks it out of that job first - which is exactly what Ansible's own
+# async mechanism does under the hood (see that task's own header for the
+# full, primary-sourced account, including a real build where dropping
+# async here meant osot.exe never even appeared in Task Manager). What's
+# NOT restored is async_status polling against that job - that's what
+# actually broke on WinRM with a real "Bad HTTP response... Code 400" (see
+# rdsh_2025_tpl.pkr.hcl's own header). Instead, "Wait for OSOT Optimize log
+# to report completion" polls for real completion the same way this
+# pipeline's own file-gate pauses already do it successfully: many SHORT,
+# fresh, independent WinRM calls in an until/retries loop, each one just
+# reading the log file and returning - decoupled entirely from the async
+# job above, so neither the operation-timeout nor the Code 400 failure
+# mode nor the job-object-kill problem can recur through this path.
+# "Ensure the OSOT process is no longer running" (per the user's own
+# suggestion) then explicitly checks for and stops any lingering osot.exe
+# before the reboot task runs, rather than assuming it's gone.
+#
+# Also confirms (again) that -r (report_file_path_name) is a dead end, not
+# an alternative worth revisiting here - already tested twice on a genuine
+# successful Optimize pass, full file path and bare directory both, never
+# produced anything. This fix uses OSOT's own unprompted default log
+# instead of -r for exactly that reason.
+- name: Copy OSOT to VM
+  ansible.windows.win_copy:
+    src: "{{ osot_installer }}"
+    dest: "C:\\Temp\\{{ osot_installer | basename }}"
+
+- name: Deliver OSOT Optimize script to C:\Temp
+  # This is the ONLY copy of the actual OSOT invocation - the "Start OSOT
+  # Optimize pass" task below just calls this file rather than inlining its
+  # own separate copy of the command, specifically so an interactive
+  # console test (run this same file by hand - see its own header for the
+  # exact command) can never quietly drift out of sync with what Ansible
+  # actually runs.
+  ansible.windows.win_template:
+    src: run_osot_optimize.ps1.j2
+    dest: "C:\\Temp\\run_osot_optimize.ps1"
+
+- name: Start OSOT Optimize pass (async)
+  # RESTORED async/poll:0 2026-09-15 (later the same day) after a real
+  # build proved the plain-synchronous version above (briefly tried
+  # without async, on the theory that nothing needed the timeout-avoidance
+  # async gave it anymore) never actually launched osot.exe at all -
+  # confirmed directly via Task Manager showing no OmnissaHorizonOS
+  # process anywhere, right after this task itself reported "changed" and
+  # the play moved on to polling a log file that was never going to
+  # appear.
+  #
+  # Root cause, confirmed from Ansible's OWN async_wrapper.ps1 source
+  # (github.com/ansible/ansible/blob/devel/lib/ansible/executor/powershell/async_wrapper.ps1)
+  # and corroborated on the Ansible community forum
+  # (forum.ansible.com/t/start-a-long-running-script-in-windows-and-detach/42974):
+  # every process WinRM spawns - even a detached Start-Process, even
+  # elevated via -Verb RunAs - is placed in a Windows Job Object tied to
+  # that WinRM shell/connection, with "kill on job close" behavior. The
+  # instant this task's own command returns (which, correctly, is almost
+  # immediately now that run_osot_optimize.ps1.j2 no longer -Waits), the
+  # job object is torn down and EVERYTHING still in it - including the
+  # osot.exe this script just launched a moment earlier - gets killed
+  # with it. Elevation via -Verb RunAs does not exempt it: UAC/AppInfo
+  # elevation doesn't imply CREATE_BREAKAWAY_FROM_JOB on its own.
+  #
+  # async_wrapper.ps1's own comments confirm this is exactly what async
+  # exists to solve on Windows: "We need to escape the job of the current
+  # process to allow the async process to outlive the Windows job" - it
+  # either spawns the process with CREATE_BREAKAWAY_FROM_JOB directly, or
+  # (when breakaway isn't available, e.g. under PSRP) uses
+  # Win32_Process.Create via WMI to get a parent process outside the job
+  # tree entirely. Plain win_shell has no equivalent - ansible.windows.
+  # win_shell's own module docs say so directly: "WinRM will not return
+  # from a command execution until all child processes created have
+  # exited. Thus, it is not possible to use ansible.windows.win_shell to
+  # spawn long-running child or background processes." Async was never
+  # optional here; ansible/ansible #81095 (the WinRM 20s/30s operation-
+  # timeout issue this file's own header already credits async for fixing)
+  # was real, but NOT the only reason async was in the original design -
+  # this job-object breakaway was the other, and removing async lost both,
+  # not just the one this file's header happened to name.
+  #
+  # This does NOT bring back async_status polling, which is what actually
+  # broke on the LAST real build (Bad HTTP response returned from server.
+  # Code 400 - see rdsh_2025_tpl.pkr.hcl's own header for that fix). This
+  # task fires the job and never checks on it again through Ansible's own
+  # async machinery; "Wait for OSOT Optimize log to report completion"
+  # below still does its own, unrelated controller-side polling directly
+  # against OSOT's log file, decoupled from this async job entirely - the
+  # combination neither hangs on WinRM's operation timeout, nor gets the
+  # spawned process killed early, nor re-triggers the Code 400 failure
+  # mode. async: 3600 matches this file's other polling ceilings; poll: 0
+  # means Ansible dispatches and returns without ever polling this job
+  # itself.
+  ansible.windows.win_shell: |
+    powershell.exe -ExecutionPolicy Bypass -File C:\Temp\run_osot_optimize.ps1
+  async: 3600
+  poll: 0
+  register: osot_optimize_start
+
+- name: Wait for OSOT Optimize log to report completion
+  # CURRENT FIX (see this file's own header above for the full history of
+  # why): detect completion via many SHORT, fresh, independent WinRM
+  # calls in an until/retries loop - the same idiom this pipeline's own
+  # file-gate pauses (enter_audit_mode/tasks/main.yml) and the old
+  # async_status loop above both already used successfully - rather than
+  # trusting one long-held call or a single background script to stay
+  # alive and self-report back to Ansible (confirmed, twice, on real
+  # builds, NOT to work: once with Start-Process -Wait, once with an
+  # in-script polling loop watching for the exact same signal below).
+  # Each retry just reads OSOT's own newest Optimize_*.log fresh and
+  # returns - nothing has to stay alive between polls. 15s x 240 retries
+  # = 3600s (1 hour) ceiling, matching this pipeline's other polling
+  # loops and the old async: 3600 window it replaces.
+  #
+  # "htmlReport:" is OSOT's own last line on a genuine success - confirmed
+  # present, verbatim, in two separate real-build successful Optimize
+  # passes (349 KB and 348 KB logs). "Status of Request for optimization
+  # is (\d+):" is parsed out of the same log as OSOT's own real status
+  # code, where available, so a genuine non-zero OSOT-reported failure
+  # still surfaces as one instead of being masked by "the log eventually
+  # contained htmlReport:". ignore_errors covers the until-loop's own
+  # default failure once retries are exhausted, so the explicit "Fail
+  # if..." task below can report a clearer, specific message instead of
+  # Ansible's generic max-retries error.
+  ansible.windows.win_shell: |
+    $log = Get-ChildItem -Path "C:\ProgramData\Omnissa\Omnissa OS Optimization Tool\Log" -Filter "Optimize_*.log" -ErrorAction SilentlyContinue |
+      Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if (-not $log) {
+      Write-Output "PENDING (no log yet)"
+      exit 0
+    }
+    $content = Get-Content -Path $log.FullName -Raw -ErrorAction SilentlyContinue
+    if ($content -notmatch 'htmlReport:') {
+      Write-Output "PENDING"
+      exit 0
+    }
+    $statusCode = "NONE"
+    if ($content -match 'Status of Request for optimization is (\d+):') {
+      $statusCode = $matches[1]
+    }
+    Write-Output "DONE:$statusCode"
+  register: osot_optimize_poll
+  until: "'DONE:' in (osot_optimize_poll.stdout | default(''))"
+  retries: 240
+  delay: 15
+  ignore_errors: true
+
+- name: Determine OSOT Optimize's own reported status code
+  # regex_replace (not regex_search) deliberately - it returns the input
+  # string unchanged on no match rather than None, so this can never error
+  # out on an unexpected stdout shape; an unchanged, non-numeric result
+  # just falls through to int(-1) below and correctly reads as a failure.
+  ansible.builtin.set_fact:
+    osot_optimize_status: "{{ osot_optimize_poll.stdout | default('') | regex_replace('.*DONE:([0-9A-Za-z]+).*', '\\1') }}"
+  when: "'DONE:' in (osot_optimize_poll.stdout | default(''))"
+
+- name: Ensure the OSOT process is no longer running
+  # Per the user's own diagnosis and suggested fix: OSOT itself doesn't
+  # reliably self-terminate after -o completes (the ORIGINAL successful
+  # interactive test earlier this session also needed the user to
+  # manually reopen OSOT afterward to check Analyze results - consistent
+  # with the process/its GUI staying resident rather than exiting on its
+  # own). Explicitly check for and stop it rather than assuming it's gone,
+  # before the reboot task below runs. Matched by exact .Path, not by
+  # name - Get-Process -Name truncates/normalizes long executable names
+  # in ways that risk a false non-match.
+  ansible.windows.win_shell: |
+    $Optimizer = "C:\Temp\{{ osot_installer | basename }}"
+    $procs = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $Optimizer }
+    if ($procs) {
+      $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+      Write-Output "Stopped $($procs.Count) lingering osot.exe process(es)"
+    } else {
+      Write-Output "No lingering osot.exe process found"
+    }
+  register: osot_optimize_cleanup
+  ignore_errors: true
+
+- name: Show OSOT Optimize output
+  ansible.builtin.debug:
+    msg:
+      # osot_optimize_start is an async DISPATCH result (poll: 0, never
+      # checked again via async_status - see that task's own header) -
+      # .stdout isn't populated on it, only .started/.ansible_job_id are,
+      # so those are what's worth showing here instead.
+      - "Launch dispatched: {{ osot_optimize_start.started | default(false) }} (job {{ osot_optimize_start.ansible_job_id | default('?') }})"
+      - "Completion poll (last): {{ osot_optimize_poll.stdout | default('(no output)') }}"
+      - "Reported status code: {{ osot_optimize_status | default('(not reached)') }}"
+      - "Process cleanup: {{ osot_optimize_cleanup.stdout | default('(no output)') }}"
+
+- name: Copy OSOT's own Optimize log into build_log_dir
+  # ADDED 2026-09-15 after real-build testing showed OSOT's own -r flag
+  # (report_file_path_name) never actually produces a file, whether given a
+  # full file path or - per Omnissa's own CLI doc's contradictory worked
+  # example ("optimization-tool.exe -r c:\reports\") - a bare directory:
+  # both were tested against a real, otherwise-fully-successful Optimize
+  # pass (confirmed via the OSOT GUI reopened afterward, showing 495/493
+  # recommended optimizations genuinely applied) and neither ever wrote
+  # anything to build_log_dir. run_osot_optimize.ps1.j2 no longer passes -r
+  # at all, since it isn't doing anything.
+  #
+  # OSOT doesn't need -r to log itself, though: it already writes its own
+  # timestamped OSOT_*.log / Optimize_*.log / Analyze_*.log files to
+  # C:\ProgramData\Omnissa\Omnissa OS Optimization Tool\Log for every
+  # invocation regardless of any flag - confirmed directly from a real VM's
+  # own file listing (multiple real runs' worth of logs sitting there,
+  # correctly timestamped, while build_log_dir stayed empty the whole
+  # time). This task just copies the newest Optimize_*.log from OSOT's own
+  # folder into build_log_dir afterward, so it still ends up in the "one
+  # place to find every component's log" convention roles/base's own
+  # header describes - without depending on a flag that doesn't work.
+  # ignore_errors: true because this is a diagnostic convenience, not a
+  # build-success criterion - the two "Fail if..." tasks below (unchanged)
+  # are what actually gate the build, based on the job's own real exit
+  # code, not on whether a copy of its log landed somewhere tidy.
+  ansible.windows.win_shell: |
+    $src = Get-ChildItem -Path "C:\ProgramData\Omnissa\Omnissa OS Optimization Tool\Log" -Filter "Optimize_*.log" -ErrorAction SilentlyContinue |
+      Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($src) {
+      Copy-Item -Path $src.FullName -Destination "{{ build_log_dir }}\osot_optimize_report.log" -Force
+      Write-Host "Copied $($src.FullName) to {{ build_log_dir }}\osot_optimize_report.log"
+    } else {
+      Write-Host "No Optimize_*.log found under OSOT's own log folder - nothing to copy."
+    }
+  when: build_log_enabled | default(true) | bool
+  ignore_errors: true
+
+- name: Fail if OSOT Optimize log never reported completion within the 1-hour polling window
+  ansible.builtin.fail:
+    msg: >-
+      OSOT Optimize's own Optimize_*.log never reached its htmlReport:
+      completion line within 3600s of polling. Console/WinRM into the VM
+      and check Task Manager for osot.exe still running, or the newest
+      Optimize_*.log directly under C:\ProgramData\Omnissa\Omnissa OS
+      Optimization Tool\Log, before re-running - this is a polling-window
+      ceiling being hit, not necessarily proof the pass itself failed.
+  when: "'DONE:' not in (osot_optimize_poll.stdout | default(''))"
+
+- name: Fail if OSOT Optimize pass exited with a non-zero, non-reboot-required code
+  # rc 3010 (ERROR_SUCCESS_REBOOT_REQUIRED) accepted as success alongside 0 -
+  # adopted from the Omnissa Community "Horizon Gold Image creation with
+  # Ansible" guide's own failed_when, a legitimate Windows convention this
+  # check was previously missing. The win_reboot task below reboots
+  # unconditionally either way, so a 3010 doesn't need special handling
+  # beyond not being treated as a failure. int(-1) below makes a missing
+  # or non-numeric status code (e.g. "NONE") fail closed rather than
+  # erroring the playbook outright.
+  ansible.builtin.fail:
+    msg: >-
+      OSOT Optimize's own log reported status "{{ osot_optimize_status | default('NONE') }}"
+      instead of 0 or 3010 - see 'Show OSOT Optimize output' above and the
+      copied log in build_log_dir.
+  when: >-
+    'DONE:' in (osot_optimize_poll.stdout | default(''))
+    and (osot_optimize_status | default('NONE') | int(-1)) not in [0, 3010]
+
+- name: Reboot after OSOT Optimize
+  ansible.windows.win_reboot:
+    reboot_timeout: 600
+    post_reboot_delay: 30
+    msg: "Rebooting after OSOT Optimize pass"

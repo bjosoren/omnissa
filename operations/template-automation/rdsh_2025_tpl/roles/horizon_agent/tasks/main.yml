@@ -1,0 +1,102 @@
+---
+# roles/horizon_agent/tasks/main.yml
+# Adapted from the source guide's rdsh_05_install_horizon.yml (the
+# agent-install half - see roles/rds_role_install for the RDS-role half,
+# which must run first: RDSH mode here is auto-detected by the installer
+# from the RDS-RD-Server role's presence, not passed as an explicit flag -
+# VDM_FORCE_DESKTOP_AGENT is deliberately NOT set, its default of 0 is what
+# keeps this in RDSH mode rather than single-user VDI mode).
+#
+# ADDLOCAL feature list built from the per-feature booleans in
+# inventory/group_vars/rdsh_2025_tpl.yml - same construction the source
+# guide uses, translated from Jinja list-concatenation into an Ansible list
+# comprehension for readability.
+- name: Build Horizon Agent ADDLOCAL feature list
+  ansible.builtin.set_fact:
+    horizon_addlocal: >-
+      {{
+        (['Core']
+        + (['BlastUDP'] if horizon_blast else [])
+        + (['USB'] if horizon_usb else [])
+        + (['NGVC'] if horizon_ngvc else [])
+        + (['RTAV'] if horizon_rtav else [])
+        + (['ClientDriveRedirection'] if horizon_cdr else [])
+        + (['SerialPortRedirection'] if horizon_serial_port else [])
+        + (['ScannerRedirection'] if horizon_scanner else [])
+        + (['GEOREDIR'] if horizon_geolocation else [])
+        + (['SmartCard'] if horizon_smartcard else [])
+        + (['HznVaudio'] if horizon_audio else [])
+        + (['TSMMR'] if horizon_mmr else [])
+        + (['RDP'] if horizon_rdp else [])
+        + (['RDSH3D'] if horizon_rdsh3d else [])
+        + (['SdoSensor'] if horizon_sdo_sensor else [])
+        + (['PerfTracker'] if horizon_perf_tracker else [])
+        + (['HelpDesk'] if horizon_help_desk else [])
+        + (['PrintRedir'] if horizon_print_redir else [])
+        + (['PSG'] if horizon_psg else [])
+        + (['URLRedirection'] if horizon_url_filtering else [])
+        ) | join(',')
+      }}
+
+- name: Show ADDLOCAL string
+  ansible.builtin.debug:
+    msg: "ADDLOCAL={{ horizon_addlocal }}"
+
+- name: Copy Horizon Agent installer to VM
+  # horizon_agent_installer is an absolute path on the control node's NFS
+  # mount (see inventory/group_vars/rdsh_2025_tpl.yml), not relative to this
+  # image directory the way ubt_2404_tpl's horizon_agent_tarball is -
+  # win_copy's src resolves directly against the control node's filesystem,
+  # so no playbook_dir prefix is needed or wanted here.
+  ansible.windows.win_copy:
+    src: "{{ horizon_agent_installer }}"
+    dest: "C:\\Temp\\{{ horizon_agent_installer | basename }}"
+
+# VDM_VC_MANAGED_AGENT - VM is managed by vCenter, driven by
+# horizon_vc_managed in group_vars. SUPPRESS_RUNONCE_CHECK=1 stops the
+# installer objecting to sysprep/RunOnce state left behind by the
+# autounattend-driven build. expected_return_code includes 3010 (reboot
+# required) and 1641 (installer-initiated reboot already in progress) as
+# well as 0, matching the source guide - either of those is a SUCCESSFUL
+# install, not a failure, and win_package would otherwise report them as
+# errors.
+- name: Install Horizon Agent (RDSH mode)
+  ansible.windows.win_package:
+    path: "C:\\Temp\\{{ horizon_agent_installer | basename }}"
+    arguments: >-
+      /s /v "/qn
+      VDM_VC_MANAGED_AGENT={{ horizon_vc_managed | int }}
+      SUPPRESS_RUNONCE_CHECK=1
+      ADDLOCAL={{ horizon_addlocal }}
+      REBOOT=ReallySuppress
+      {% if build_log_enabled | bool %}/log {{ build_log_dir }}\horizon_agent_install.log{% endif %}"
+    state: present
+    expected_return_code: [0, 3010, 1641]
+  register: horizon_install
+
+- name: Reboot after Horizon Agent install
+  ansible.windows.win_reboot:
+    reboot_timeout: 300
+    post_reboot_delay: 60
+    msg: "Rebooting after Horizon Agent installation"
+
+- name: Verify Horizon Agent installed
+  ansible.windows.win_shell: |
+    $agent = Get-ItemProperty "HKLM:\SOFTWARE\Omnissa\Horizon\Agent" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($agent) {
+      Write-Output "Horizon Agent installed: $($agent.ProductVersion)"
+    } else {
+      throw "Horizon Agent not found in registry"
+    }
+  register: horizon_verify
+  changed_when: false
+
+- name: Show installation result
+  ansible.builtin.debug:
+    msg: "{{ horizon_verify.stdout }}"
+
+- name: Horizon Agent RDSH installation complete
+  ansible.builtin.debug:
+    msg:
+      - "Mode    : RDSH (VDM_VC_MANAGED_AGENT={{ horizon_vc_managed | int }})"
+      - "ADDLOCAL: {{ horizon_addlocal }}"

@@ -1,0 +1,57 @@
+---
+# roles/apps/tasks/main.yml
+# NFS-drop-folder pattern, same idea as ubt_2404_tpl's own "apps" role and
+# its README's "Adding a custom app to the gold image" section - drop an
+# installer onto the control node's NFS mount, add one entry to
+# apps_to_install in group_vars, done. No specific app (RDM or otherwise) is
+# baked in here: I don't have a verified silent-install command line for any
+# particular Windows app you'd want on this image, so rather than guess one,
+# this role is a genuinely empty, safe no-op until you populate
+# apps_to_install yourself. Add to inventory/group_vars/rdsh_2025_tpl.yml,
+# e.g.:
+#
+#   apps_to_install:
+#     - name: "RDM"
+#       installer: "/mnt/wdnfs/Ansible/apps/RemoteDesktopManager.msi"
+#       arguments: "/qn REBOOT=ReallySuppress"
+#
+# Each entry's installer path is an absolute path on the control node's NFS
+# mount, not relative to this image directory - same convention as
+# horizon_agent_installer/dem_agent_installer/appvolumes_agent_installer
+# (see roles/horizon_agent's same comment for why win_copy's src resolves
+# directly against the control node's filesystem here, with no playbook_dir
+# prefix).
+- name: Copy extra app installers to VM
+  ansible.windows.win_copy:
+    src: "{{ item.installer }}"
+    dest: "C:\\Temp\\{{ item.installer | basename }}"
+  loop: "{{ apps_to_install | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: apps_to_install is defined and apps_to_install | length > 0
+
+- name: Install optional extra apps
+  ansible.windows.win_package:
+    path: "C:\\Temp\\{{ item.installer | basename }}"
+    arguments: "{{ item.arguments | default('/qn REBOOT=ReallySuppress') }}"
+    state: present
+    expected_return_code: [0, 3010, 1641]
+  loop: "{{ apps_to_install | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: apps_to_install is defined and apps_to_install | length > 0
+  register: apps_install
+
+# Added 2026-09-11 - the user's own 16-step sequence marks this step
+# "(Reboot)". Only reboots if something was actually installed (the
+# apps_to_install: [] default makes this role a no-op on most builds today -
+# no point rebooting for nothing), and only once even if several apps
+# installed in the loop above.
+- name: Reboot after extra app installs, if anything actually installed
+  ansible.windows.win_reboot:
+    reboot_timeout: 600
+    post_reboot_delay: 30
+    msg: "Rebooting after optional extra app installation"
+  when: >-
+    apps_install is defined and apps_install.results is defined
+    and apps_install.results | selectattr('changed', 'true') | list | length > 0

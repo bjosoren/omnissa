@@ -1,0 +1,138 @@
+# run_osot_optimize.ps1
+# Delivered to C:\Temp by roles/osot_optimize/tasks/main.yml's own
+# "Deliver OSOT Optimize script to C:\Temp" task. This file exists so an
+# interactive console test is a TRUE apples-to-apples comparison against
+# the automated run, not a manually-retyped approximation that could
+# quietly drift out of sync - "Start OSOT Optimize pass" in tasks/main.yml
+# runs this exact same file over WinRM; to test it interactively instead,
+# log on to the VM's console (or RDP) and run, from an elevated PowerShell
+# prompt:
+#
+#   powershell.exe -ExecutionPolicy Bypass -File C:\Temp\run_osot_optimize.ps1
+#
+# Do NOT manually reboot the VM while an Ansible-launched pass is still
+# in progress/pending, even to check results faster - that breaks the
+# WinRM connection tasks/main.yml's own "Wait for OSOT Optimize log to
+# report completion" task is still polling through, and kills the whole
+# build/VM, same as killing the process outright does.
+#
+# HISTORY (condensed - see tasks/main.yml's own header for the full,
+# still-current account of what was tried and why):
+#   - Originally a single synchronous win_shell -> hung. Root cause:
+#     Ansible's WinRM connection plugin cutting off a long command
+#     regardless of task-level timeouts (ansible_winrm_operation_timeout_sec
+#     defaults to 20s, read to 30s - ansible/ansible issue #81095). Fixed,
+#     at the time, by tasks/main.yml running this script async + polling
+#     via async_status - since replaced (see "CURRENT FIX" below) by
+#     controller-side polling against OSOT's own log file instead, which
+#     sidesteps the same class of problem without needing async at all.
+#   - -r (report file) REMOVED - tested for real against a genuinely
+#     successful Optimize pass (OSOT GUI reopened afterward showed 495/493
+#     applied) with both a full file path and, per Omnissa's own CLI doc's
+#     own contradictory example, a bare directory - neither ever produced a
+#     file. OSOT already writes its own timestamped logs to
+#     C:\ProgramData\Omnissa\Omnissa OS Optimization Tool\Log regardless of
+#     any flag; tasks/main.yml's own "Copy OSOT's own Optimize log into
+#     build_log_dir" task harvests that instead.
+#   - -ArgumentList as an ARRAY (@(...)), not a manually-quoted single
+#     string - each array element is its own separate argument, no manual
+#     quote-escaping needed or wanted (MicrosoftDocs/PowerShell-Docs issue
+#     #7701) - confirmed the hard way after a hand-quoted version broke at
+#     a real VM console with "Unexpected token" on the escaped quotes.
+#
+# INVOCATION REWRITTEN 2026-09-15 (again) - was
+# Start-Process -NoNewWindow -PassThru @('-o'), tried with a plain WinRM
+# connection, then with become:true/runas/SYSTEM, then launched via a
+# Scheduled Task instead of this script's own invocation changing at all -
+# none of it got OSOT past its own "Omnissa General Terms" EULA dialog
+# (SYSTEM in Session 0 has no window station to draw it on at all; a
+# LogonType=Interactive Scheduled Task targeting the console's own
+# Administrator session never actually left State=Queued, confirmed twice
+# on a real build, once triggered locally at the console itself). Full
+# account of all three attempts is in tasks/main.yml's own header - kept
+# there rather than duplicated here since that's where the become/
+# Scheduled Task/PsExec code itself used to live.
+#
+# The user then pointed at the Omnissa Community's own "Horizon Gold Image
+# creation with Ansible" guide (community.omnissa.com, topic 72927), whose
+# own working OSOT Optimize invocation is:
+#   Start-Process "C:\Temp\<osot.exe>" -ArgumentList $arglist -Verb RunAs -Wait
+# -Verb RunAs (ShellExecute-based elevation) instead of -NoNewWindow is the
+# one, real, load-bearing difference worth adopting - they're mutually
+# exclusive in Start-Process (can't combine -Verb RunAs with -NoNewWindow
+# at all), so this is a genuine fork, not a tweak. -NoNewWindow's original
+# rationale (Start-Process's default new-window behavior needing a window
+# station a WinRM session doesn't have) didn't hold up against what was
+# actually observed in Session 0/the Scheduled Task attempts - adopting
+# -Verb RunAs is going on this guide's own proven, real-world result
+# rather than further theorizing about why.
+#
+# NOT adopted from that guide: -v (verbose) - Omnissa's own KB 94531
+# ("Omnissa Optimization Tool for Horizon: Compatibility Issues with
+# Packer Automation") documents "-o ... -v" hanging at "Loading Templates"
+# specifically when automated via Packer ("will function interactively,
+# however will not function via Packer") - that guide's own pipeline isn't
+# Packer-based (plain ansible-playbook against a running VM), this
+# project's is, so that specific documented risk applies here and not
+# there. Also NOT adopted: the guide's own `exit $LASTEXITCODE` check after
+# Start-Process - $LASTEXITCODE is NOT set by Start-Process at all (only by
+# direct/call-operator native invocation - Start-Process's own -PassThru
+# process object's ExitCode property is the only reliable read), so this
+# keeps the already-correct -PassThru/.ExitCode pattern below rather than
+# copying a check that likely never actually fires in the guide's own
+# pipeline either. Also NOT adopted (yet): -t/explicit template - still
+# omitted, relying on the documented default-template fallback; see
+# tasks/main.yml's own header for a corrected template-string candidate
+# from this same guide, worth trying separately rather than changing two
+# things in the same test.
+#
+# rc 3010 (ERROR_SUCCESS_REBOOT_REQUIRED) is treated as success alongside 0
+# by tasks/main.yml's own failed_when now, adopted from the same guide - a
+# legitimate Windows convention this project's check was missing before.
+#
+# -Wait REMOVED 2026-09-15 - -Verb RunAs got OSOT itself all the way to a
+# genuinely completed run for the first time (confirmed on a real build:
+# Task Scheduler's own Omnissa\OptimizationToolTask entries ran and were
+# cleaned up same as the original successful test; Optimize_*.log fully
+# populated with hundreds of real actions, ending in an "htmlReport:" line;
+# a reopened OSOT GUI Analyze showed 496/494 applied) - but
+# Start-Process ... -Wait never returned even so, leaving the pipeline
+# stuck at "Wait for OSOT Optimize pass to finish" indefinitely despite the
+# real work being done. Two plausible, not mutually exclusive causes: OSOT
+# itself may simply not self-terminate after -o finishes (the ORIGINAL
+# successful interactive test earlier this session also needed the user to
+# manually reopen OSOT afterward to check Analyze results - consistent with
+# the process/its GUI staying resident rather than exiting on its own), or
+# -Verb RunAs's own -Wait is unreliable across UAC's elevation handoff (a
+# general, documented PowerShell quirk, independent of this specific tool).
+# Either way, trusting Start-Process's own exit-tracking isn't safe here.
+#
+# FIRST FIX (superseded, see below): launch without -Wait, then have this
+# script itself poll its own Optimize_*.log in a while loop for the
+# "htmlReport:" completion line, stopping the process once found. Tested
+# for real on the next build: confirmed, via the user's own direct check,
+# that the Optimize_*.log genuinely DID reach htmlReport: and osot.exe was
+# genuinely gone from Task Manager - the work was done, cleanly - but
+# tasks/main.yml's own "Wait for OSOT Optimize pass to finish" (at the
+# time, an async_status poll) STILL never saw it as finished. So the
+# detection target itself was never wrong - it's that trusting ONE
+# long-lived async-wrapped background PowerShell script (this script's own
+# inner poll loop, sitting in Start-Sleep for however long OSOT takes) to
+# reliably report itself finished back to Ansible's async_status isn't
+# working, for reasons not worth chasing further when a more robust
+# pattern already exists elsewhere in this same pipeline.
+#
+# CURRENT FIX 2026-09-15: this script goes back to just launching OSOT and
+# returning immediately - no internal loop, no Stop-Process, no throw.
+# Completion detection AND process cleanup both moved to
+# tasks/main.yml's own "Wait for OSOT Optimize log to report completion"
+# and "Ensure the OSOT process is no longer running" tasks instead, which
+# poll/act from the Ansible controller side via many short, fresh,
+# independent WinRM calls - the same idiom this pipeline's own file-gate
+# pauses and the original async_status loop both already used
+# successfully, rather than one script that has to stay alive and
+# self-report for however long OSOT takes. See that file's own header for
+# the full reasoning. This script's only remaining job is the launch
+# itself, so a WinRM call running it returns in well under a second.
+$Optimizer = "C:\Temp\{{ osot_installer | basename }}"
+Start-Process -FilePath $Optimizer -ArgumentList @('-o') -Verb RunAs

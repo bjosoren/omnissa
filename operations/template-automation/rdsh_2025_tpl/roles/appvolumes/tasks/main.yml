@@ -1,0 +1,46 @@
+---
+# roles/appvolumes/tasks/main.yml
+# Adapted from the source guide's rdsh_07_install_appvolumes.yml.
+- name: Copy App Volumes Agent installer to VM
+  # appvolumes_agent_installer is an absolute NFS mount path, not relative
+  # to this image dir - see roles/horizon_agent's same comment.
+  ansible.windows.win_copy:
+    src: "{{ appvolumes_agent_installer }}"
+    dest: "C:\\Temp\\{{ appvolumes_agent_installer | basename }}"
+
+- name: Install App Volumes Agent
+  ansible.windows.win_package:
+    path: "C:\\Temp\\{{ appvolumes_agent_installer | basename }}"
+    arguments: >-
+      /qn
+      REBOOT=ReallySuppress
+      MANAGER_ADDR={{ appvolumes_manager }}
+      MANAGER_PORT={{ appvolumes_port }}
+      EnforceSSLCertificateValidation={{ appvolumes_ssl_validation }}
+      {% if build_log_enabled | bool %}/log {{ build_log_dir }}\appvolumes_install.log{% endif %}
+    state: present
+    expected_return_code: [0, 3010, 1641]
+  register: appvolumes_install
+
+- name: Reboot after App Volumes Agent install
+  ansible.windows.win_reboot:
+    reboot_timeout: 300
+    post_reboot_delay: 30
+    msg: "Rebooting after App Volumes Agent installation"
+
+- name: Verify App Volumes Agent installed
+  ansible.windows.win_shell: |
+    $app = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
+      Where-Object { $_.DisplayName -like "*App Volumes*" } |
+      Select-Object -First 1
+    if ($app) {
+      Write-Output "App Volumes Agent installed: $($app.DisplayName) $($app.DisplayVersion)"
+    } else {
+      throw "App Volumes Agent not found in registry"
+    }
+  register: appvolumes_verify
+  changed_when: false
+
+- name: Show installation result
+  ansible.builtin.debug:
+    msg: "{{ appvolumes_verify.stdout }}"

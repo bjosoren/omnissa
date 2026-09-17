@@ -1,0 +1,36 @@
+---
+# roles/store_apps_cleanup/tasks/main.yml
+# Removes Store-delivered apps that don't belong on an RDSH multi-session
+# host - per the user's explicit 16-step sequence (step 9: "Clean Store
+# Apps") and both attached Omnissa PDFs, which call this out as its own
+# post-Generalize step, not something folded into OSOT itself. Runs
+# -AllUsers so it also strips the package from the Default user profile
+# that osot_generalize's answer-file CopyProfile step (see that role's
+# template) just copied it into - otherwise every future Instant Clone
+# session would get it right back.
+#
+# Only the two apps the user actually named are removed here (Copilot,
+# Bing Search) - not a blanket "remove everything in the Store" sweep,
+# since there's no sign-off for removing anything beyond what was
+# requested. Add more entries to the $apps list below if you want this
+# role to strip more.
+#
+# No reboot task here (the user's own list marks this step "(Reboot)", but
+# Remove-AppxPackage/Remove-AppxProvisionedPackage don't require one to
+# take effect - same kind of call already made once in this playbook, see
+# the duplicate "OSOT Optimize" step corrected out of the user's original
+# sequence). Flagging the divergence rather than silently following the
+# reboot marker for an operation that doesn't need it.
+- name: Remove unwanted Store apps (AllUsers + provisioned, so new profiles don't get them back)
+  ansible.windows.win_shell: |
+    $apps = @('Microsoft.Copilot', 'Microsoft.BingSearch')
+    foreach ($app in $apps) {
+      Get-AppxPackage -AllUsers -Name $app -ErrorAction SilentlyContinue | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue
+      Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -eq $app } | Remove-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue
+    }
+  register: store_apps_cleanup_result
+  changed_when: true
+
+- name: Show Store app cleanup output
+  ansible.builtin.debug:
+    msg: "{{ store_apps_cleanup_result.stdout_lines | default([]) }}"

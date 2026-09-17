@@ -1,0 +1,91 @@
+---
+# roles/enter_audit_mode/tasks/main.yml
+# REWRITTEN 2026-09-16: this role no longer ENTERS Audit Mode - it now just
+# VERIFIES the guest is already in it, and fails fast with a clear message
+# if not. Audit Mode entry moved to floppy/autounattend.pkrtpl.hcl itself
+# (Microsoft-Windows-Deployment/Reseal/Mode=Audit in the oobeSystem pass),
+# so the guest is in Audit Mode from its very first boot - before Ansible's
+# own "Gathering Facts" task, let alone this role, ever runs. See that
+# file's own header for the full citations (Omnissa's "Manually creating
+# optimized Windows images for Horizon VMs" PDF, "Enter audit mode" chapter,
+# page 16; Microsoft Learn's "Boot Windows to Audit Mode or OOBE" and
+# "auditSystem" pages) and for exactly what moved where.
+#
+# Why keep this role at all, then, rather than delete it outright: this
+# pipeline's own established pattern is to verify real state rather than
+# assume it (see osot_optimize's own SessionId/htmlReport: checks,
+# vmware_tools' own reboot-pending checks, etc.) - and Audit Mode is a
+# precondition several roles after this one depend on implicitly
+# (dotnet35/windows_update/apps/osot_optimize all assume it; osot_generalize
+# REQUIRES it per Omnissa's own "Command Line Operations" PDF, see that
+# role's header). If the new autounattend-driven entry ever silently didn't
+# take - a typo in the Reseal/Mode value, a Windows Setup behavior change,
+# whatever - the old failure mode would be finding out at osot_generalize's
+# own -g call, potentially 30-40 minutes and five roles later, with a much
+# less obvious error. One cheap registry check here catches that
+# immediately instead, at the exact point in the pipeline where Audit Mode
+# was always supposed to already be true.
+#
+# The check: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State,
+# value ImageState, confirmed against Microsoft's own "Windows Setup
+# States" reference (https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/windows-setup-states) -
+# IMAGE_STATE_SPECIALIZE_RESEAL_TO_AUDIT is the documented value for "has
+# completed the specialize pass and will continue into Audit Mode", which
+# is exactly this pipeline's own path (a fresh install, never generalized
+# at this point) -
+# IMAGE_STATE_GENERALIZE_RESEAL_TO_AUDIT is the OTHER documented Audit Mode
+# value (post-generalize re-entry) - accepted too, defensively, even though
+# nothing in this pipeline's current design should ever hit it here.
+#
+# Placed right after vmware_tools (same position this role has always had)
+# rather than moved earlier - vmware_tools' own pending-reboot-settling
+# loop reboots the guest up to 4 times, so checking here also confirms
+# Audit Mode genuinely persisted through those reboots (Audit Mode is
+# "sticky" across ordinary reboots, per Microsoft's own documented
+# behavior and this pipeline's own prior real-build confirmation), not
+# just that the very first boot landed there.
+#
+# HISTORY of what this role used to do (condensed - full blow-by-blow
+# available in this file's own git history if ever needed): originally
+# entered Audit Mode itself, mid-pipeline, via `sysprep /audit /reboot
+# /unattend:C:\Temp\audit_answer.xml` after a full OOBE-based first boot -
+# added 2026-09-13 so the user could interactively test OSOT at the
+# console before trusting any automated invocation of it (osot_optimize's
+# own -o call was, at the time, an unsolved hang). That approach worked
+# (confirmed on real builds, after several rounds of fixing
+# audit_answer.xml.j2's own AutoLogon/AdministratorPassword pairing - see
+# that file's own final header before deletion), and this role also
+# carried, at various points, up to three separate manual pauses for
+# interactive testing/review, all since removed as osot_optimize's own
+# invocation became a real, evidenced fix rather than a guess (see
+# roles/osot_optimize/tasks/main.yml's own header) and as the pre-Generalize
+# pause in roles/osot_generalize took over that job (see that role's own
+# header). roles/enter_audit_mode/templates/audit_answer.xml.j2 is now
+# DELETED - its proven auditSystem/auditUser content was moved, verbatim,
+# into floppy/autounattend.pkrtpl.hcl instead of being re-derived, since it
+# already did exactly the job this file's own oobeSystem-triggered Audit
+# Mode entry now also needs.
+- name: Verify the VM entered Audit Mode automatically during install
+  ansible.windows.win_shell: |
+    (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State' -Name ImageState -ErrorAction SilentlyContinue).ImageState
+  register: audit_mode_check
+  changed_when: false
+
+- name: Fail if the VM did NOT enter Audit Mode automatically during install
+  ansible.builtin.fail:
+    msg: >-
+      Expected ImageState to be IMAGE_STATE_SPECIALIZE_RESEAL_TO_AUDIT (or
+      IMAGE_STATE_GENERALIZE_RESEAL_TO_AUDIT) but got
+      "{{ audit_mode_check.stdout | trim | default('(empty)') }}" instead -
+      the VM is not in Audit Mode. Check floppy/autounattend.pkrtpl.hcl's
+      own oobeSystem pass (Microsoft-Windows-Deployment/Reseal/Mode) landed
+      correctly on the floppy actually used for this build, before
+      re-running - every role after this one (dotnet35/windows_update/apps/
+      osot_optimize/osot_generalize) assumes Audit Mode is already active.
+  when: >-
+    (audit_mode_check.stdout | trim) not in
+    ['IMAGE_STATE_SPECIALIZE_RESEAL_TO_AUDIT', 'IMAGE_STATE_GENERALIZE_RESEAL_TO_AUDIT']
+
+- name: Show confirmed Audit Mode state
+  ansible.builtin.debug:
+    msg: "VM confirmed in Audit Mode: {{ audit_mode_check.stdout | trim }}"

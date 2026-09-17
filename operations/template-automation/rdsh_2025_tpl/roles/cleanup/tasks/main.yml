@@ -1,0 +1,15 @@
+---
+# roles/cleanup/tasks/main.yml
+# Clears staged installers - matches ubt_2404_tpl's cleanup role clearing
+# /tmp. No explicit shutdown task here, same as ubt_2404_tpl: Packer's own
+# shutdown_command (see rdsh_2025_tpl.pkr.hcl) runs automatically once every
+# provisioner finishes and this is the last one - an explicit shutdown here
+# would race it.
+- name: Remove staged installers from C:\Temp
+  ansible.windows.win_shell: |
+    Get-ChildItem -Path C:\Temp -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+  changed_when: false
+
+- name: Build complete
+  ansible.builtin.debug:
+    msg: "Windows Server 2025 RDSH golden image provisioning complete - powering off for snapshot."

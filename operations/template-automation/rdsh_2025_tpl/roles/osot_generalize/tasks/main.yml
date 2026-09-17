@@ -1,0 +1,175 @@
+---
+# roles/osot_generalize/tasks/main.yml
+# OSOT Generalize pass - runs Sysprep via OSOT's own documented -g/-generalize
+# CLI switch (rather than calling sysprep.exe directly), using a custom
+# answer file (templates/generalize_answer.xml.j2) instead of OSOT's built-in
+# default one - the documented form is
+# "-g [answerfile] [-reboot|-shutdown]" (Omnissa docs: "Run Windows OS
+# Optimization Tool for Horizon from Command Line").
+#
+# Why a custom answer file at all: plain `-g -reboot` reseals with OSOT's
+# own bundled unattend.xml, which boots straight to interactive OOBE - a
+# human has to click through language/account screens, and there is no
+# WinRM listener up afterward. Packer's ansible provisioner (and this
+# playbook, which still has store_apps_cleanup/rds_role_install/
+# horizon_agent/dem/osot_finalize_cleanup/appvolumes/osot_finalize to run
+# after this point) would simply hang forever waiting for a connection that
+# never comes back. This mirrors exactly the problem autounattend.pkrtpl.hcl's own
+# oobeSystem/FirstLogonCommands block already solves for the FIRST boot -
+# generalize_answer.xml.j2 re-solves it for THIS boot, since Sysprep's
+# mini-setup is effectively a second first-boot.
+#
+# Architecture note: the user explicitly chose "reseal to full OOBE with
+# autologon" over an Audit-mode RESEAL (Mode=Audit) when asked, via this
+# project's AskUserQuestion tool, how this pipeline should survive
+# Generalize's reboot without MDT's LiteTouch continuation agent - see
+# generalize_answer.xml.j2's own header for how that choice is implemented
+# (AutoLogon + CopyProfile + a trimmed FirstLogonCommands, matching the
+# manual GUI guide's own approach rather than MDT's). That decision is
+# about what the machine reseals TO after Generalize runs, and stands.
+#
+# Audit Mode precondition: per Omnissa's own "Optimizing Images Using
+# Omnissa Horizon Windows OS Optimization Tool - Command Line Operations"
+# PDF, Generalize's own Notes state plainly "The generalize operation
+# requires Windows in audit mode." This role does NOT enter Audit Mode
+# itself (an earlier version of this file did, right here, immediately
+# before the -g call below) - MOVED 2026-09-13 to roles/enter_audit_mode,
+# which now runs much earlier in playbook.yml, right after vmware_tools
+# (before dotnet35/windows_update/apps/osot_optimize too - repositioned
+# from an initial "right before osot_optimize only" placement after
+# reviewing Omnissa's "Manually creating optimized Windows images for
+# Horizon VMs" PDF end to end, whose own step order enters audit mode
+# before hypervisor tools/updates/apps, not just before Optimize - see
+# roles/enter_audit_mode's own header for the full rationale), so the user
+# can interactively test OSOT from the vCenter console while already in
+# Audit Mode. Audit Mode is "sticky" across the ordinary reboots that
+# happen in dotnet35/windows_update/apps/osot_optimize between there and
+# here, so the guest is still in Audit Mode by the time this role runs -
+# nothing in this playbook exits it before the -g call below does. (Every
+# role after THIS one - store_apps_cleanup/rds_role_install/horizon_agent/
+# dem/osot_finalize_cleanup/appvolumes/osot_finalize - runs after Generalize
+# has already exited Audit Mode, back into the full-OOBE-with-autologon
+# state generalize_answer.xml.j2 reseals to.)
+#
+# Manual pause before Generalize: ADDED 2026-09-15, per the user's explicit
+# request, right before this role does anything. Generalize is a much
+# harder step to walk back than the osot_optimize pause that used to exist
+# further up the pipeline (see below) was guarding: it consumes one of
+# Sysprep's limited rearm counts (see this role's own note further down/
+# enter_audit_mode's header), and it exits Audit Mode entirely, resealing
+# straight into full OOBE - there's no going back to "still in Audit Mode,
+# nothing committed yet" once it's released. This is the last point in the
+# pipeline where you can inspect the VM (OSOT's optimizations, dotnet35/
+# windows_update/apps results) while still in that easy-to-re-run state,
+# so the pause sits first in this role, before "Ensure OSOT is present on
+# VM" even runs.
+#
+# NOW THE ONLY MANUAL CHECKPOINT in the whole Audit-Mode stretch, as of
+# later the same day: roles/enter_audit_mode used to have its own separate
+# pause too, positioned before dotnet35/windows_update/apps/osot_optimize,
+# for interactive OSOT testing at the console back when osot_optimize's
+# own invocation was an unsolved hang with no automated fix. Per the
+# user's own request, that earlier pause was removed once osot_optimize's
+# invocation became a real, evidenced fix rather than a guess (see that
+# role's own header for the full history) - a failed osot_optimize already
+# halts the play outright before this role is ever reached, so a separate
+# checkpoint before Optimize even runs was redundant with this one. This
+# pause is what's left: one manual look, positioned AFTER Optimize has
+# already run and proven itself on this build, not before it.
+#
+# Same v3 file-gate construct as enter_audit_mode's own remaining pause -
+# pure controller-side `lookup()` + `pause`, no module dispatched to any
+# host, so it's immune to the ansible_shell_type=cmd extra-var problem that
+# broke the first two attempts at this pattern (see enter_audit_mode's own
+# PAUSE task for the full root-cause history). Release with `touch` from a
+# SEPARATE shell on ubt-ans-wrkr-02, same as every other pause in this
+# pipeline - this terminal (running packer build) stays busy the whole
+# time and won't accept input for this.
+#
+# MADE TOGGLEABLE 2026-09-16, per the user's explicit request ("the osot
+# generalize pause can now be disabled"), following the same pattern
+# windows_update's own enable_windows_update flag already established
+# (inventory/group_vars/rdsh_2025_tpl.yml) rather than deleting this code
+# outright: osot_optimize's own earlier pause (see the history above) WAS
+# deleted once trust in that step was established, but that one had no
+# further use once removed - this one is worth being able to switch back
+# on for a future build where you want the manual look again (a new answer
+# file, an OSOT version bump, anything else worth re-checking before
+# Generalize commits), without re-writing it from scratch. Set
+# osot_generalize_manual_pause: true in group_vars to bring it back -
+# defaults to false now, matching the user's request to disable it for the
+# next run.
+- name: PAUSE (file-gate) - clear any stale continue-marker before waiting for pre-Generalize review
+  ansible.builtin.debug:
+    msg: "{{ lookup('ansible.builtin.pipe', 'rm -f /tmp/rdsh_2025_tpl_pre_generalize_pause.go; echo marker-cleared') }}"
+  when: osot_generalize_manual_pause | default(false) | bool
+
+- name: Show how to review the VM before Generalize
+  ansible.builtin.debug:
+    msg:
+      - "dotnet35/windows_update/apps/osot_optimize have all completed - the VM is still in Audit Mode, nothing committed yet."
+      - "Open this VM's console in vCenter (or RDP) and review whatever you want to check before Generalize runs - e.g.:"
+      - "    Get-Content 'C:\\ProgramData\\Omnissa\\Logs\\osot_optimize_report.log'"
+      - "  to see OSOT's own Optimize summary (copied there by osot_optimize's own task)."
+      - ""
+      - "IMPORTANT: once you release this pause, Generalize (sysprep -g) runs - that consumes one of Sysprep's limited rearm counts and exits Audit Mode for good, resealing into full OOBE. This is your last chance to look around before that happens."
+      - ""
+      - "When ready to continue: from a SEPARATE shell on ubt-ans-wrkr-02 (a second SSH session - this terminal is busy running packer build) run:"
+      - "    touch /tmp/rdsh_2025_tpl_pre_generalize_pause.go"
+  when: osot_generalize_manual_pause | default(false) | bool
+
+- name: PAUSE (file-gate) - wait for pre-Generalize review to finish
+  ansible.builtin.pause:
+    seconds: 15
+  until: (lookup('ansible.builtin.fileglob', '/tmp/rdsh_2025_tpl_pre_generalize_pause.go') | default([], true) | length) > 0
+  retries: 240
+  delay: 0
+  when: osot_generalize_manual_pause | default(false) | bool
+
+- name: Ensure OSOT is present on VM (idempotent copy)
+  ansible.windows.win_copy:
+    src: "{{ osot_installer }}"
+    dest: "C:\\Temp\\{{ osot_installer | basename }}"
+
+- name: Deliver custom Sysprep answer file for OSOT Generalize
+  ansible.windows.win_template:
+    src: generalize_answer.xml.j2
+    dest: "C:\\Temp\\generalize_answer.xml"
+
+- name: Trigger OSOT Generalize pass (Sysprep - reboots into OOBE mini-setup)
+  # async/poll=0: fire-and-forget. Once Sysprep starts tearing the current
+  # session down, the WinRM connection this command is running over goes
+  # away mid-command - waiting on it the normal synchronous way would just
+  # time out rather than ever seeing a clean exit code, so this doesn't
+  # wait. ignore_errors covers the connection drop itself being reported as
+  # a task failure. -reboot IS intentional here (unlike osot_optimize's own
+  # task, which keeps its reboot under win_reboot's control): Generalize's
+  # reboot is Sysprep's own mini-setup boot, not a plain restart, and
+  # OSOT/Sysprep need to own that transition themselves.
+  ansible.windows.win_shell: |
+    & "C:\Temp\{{ osot_installer | basename }}" -g "C:\Temp\generalize_answer.xml" -reboot
+  async: 15
+  poll: 0
+  ignore_errors: true
+
+- name: Pause to let Sysprep begin tearing down WinRM before reconnecting
+  # Without this, wait_for_connection below could trivially succeed against
+  # the STILL-OLD, not-yet-rebooted session (WinRM doesn't necessarily drop
+  # the instant the command above returns), and the playbook would then run
+  # store_apps_cleanup/rds_role_install/etc. against a machine that's about
+  # to reboot out from under it mid-task. 90s is generous headroom for
+  # Sysprep to actually begin tearing the session down before the real wait
+  # starts.
+  ansible.builtin.pause:
+    seconds: 90
+
+- name: Wait for WinRM to come back after Sysprep + OOBE mini-setup
+  # Generous timeout - this isn't a plain reboot, it's Sysprep regenerating
+  # the SID/drivers/etc. plus a full OOBE mini-setup pass plus
+  # generalize_answer.xml.j2's own FirstLogonCommands re-enabling WinRM, all
+  # running before there's anything to reconnect to.
+  ansible.builtin.wait_for_connection:
+    connect_timeout: 30
+    sleep: 15
+    timeout: 1800
+    delay: 30

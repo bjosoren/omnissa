@@ -1,0 +1,95 @@
+---
+# roles/osot_finalize/tasks/main.yml
+# OSOT Finalize pass - the last of the three OSOT stages (Optimize ->
+# Generalize -> Finalize), per Omnissa's own guides and the MDT task
+# sequence they document (which shows Optimize once, Generalize once, then
+# agents/GPU drivers, THEN Finalize once, right before shutdown - not a
+# second Optimize pass, see this playbook's own header for the correction
+# made to the user's originally-stated step list on that point). Placed
+# after appvolumes and before hardening/cleanup, matching that ordering.
+#
+# SPLIT INTO TWO PASSES 2026-09-16, per the user's explicit request, made
+# while watching a real build's Finalize run near the end of the pipeline:
+# this role now runs ONLY the second of two OSOT Finalize invocations - jobs
+# 9-10 (Clear KMS Settings, Flush DNS cache), the network/licensing-identity
+# reset jobs, kept right here as the LAST OSOT step before hardening/
+# cleanup/Packer's own shutdown_command. The first pass (jobs 0-7,
+# disk/profile/log cleanup - including job 7 "Zero empty disk space", which
+# needs SDelete64.exe) moved to the new roles/osot_finalize_cleanup,
+# positioned BEFORE appvolumes in playbook.yml - see that role's own header
+# for the full rationale, including why the user wanted App Volumes
+# installed only after the (potentially long-running) disk-zeroing job has
+# genuinely finished.
+#
+# Job 11 ("Release IP Address") - REMOVED 2026-09-16, same day it was
+# added, before ever shipping in a real build with this split in place. A
+# real build (still on the pre-split single-pass code, but with the same
+# combined job list) failed with a WinRM ConnectTimeoutError right where
+# job 11 would run - "Max retries exceeded... connect timeout=30" - a fresh
+# TCP connect failing outright, not an existing session resetting, which
+# matches the guest's IP actually changing out from under the connection.
+# Confirmed against Omnissa's own docs.omnissa.com Finalize command-line
+# reference: job 11 is literally "Releases IP Address" (no further
+# mechanism detail given, and no warning about remote-session risk either).
+# This isn't just an Ansible-task problem: rdsh_2025_tpl.pkr.hcl's own
+# communicator = "winrm" means Packer's OWN shutdown_command rides this
+# same WinRM channel right after this role runs, so losing the IP here
+# could just as easily break Packer's graceful shutdown, not only this
+# role's own task. Given that risk and no documented guidance either way,
+# the user's explicit choice was to drop job 11 from the automated pipeline
+# rather than risk a second failed build cycle chasing an undocumented
+# Packer/WinRM interaction - see inventory/group_vars/rdsh_2025_tpl.yml's
+# own comment on osot_finalize_job_numbers for the full note. Re-adding it
+# needs its own dedicated, carefully-observed test run, not a guess bundled
+# in here.
+#
+# Job 8 ("Creates local group policies", needs LGPO.exe) stays excluded from
+# both passes, unchanged from before the split - not wanted, not staged.
+#
+# Job 9 ("Clears KMS Settings") - FLAGGED BACK TO THE USER, not silently
+# changed: this reverses an earlier explicit decision. inventory/group_vars/
+# rdsh_2025_tpl.yml's own original 2026-09-11 comment on
+# osot_finalize_job_numbers said job 9 was deliberately excluded because
+# "this image uses win_kms_key's GVLK... clearing KMS settings here isn't
+# something the user wants done at Finalize time." The user's 2026-09-16
+# request explicitly listed "9,10 and 11" for this second pass, which
+# re-includes it - implemented as asked, but worth confirming this is an
+# intentional reversal of that GVLK reasoning and not just an oversight
+# made while calling out numbers quickly during a live build, since the
+# two are in direct tension (a GVLK-activated image arguably SHOULD have
+# its KMS activation state cleared before capture, so each clone
+# re-activates cleanly - which is also a real, defensible reason TO include
+# it - but that's a different rationale than the one originally on record).
+#
+# No SDelete64.exe staging here anymore - job 7 (the only job that needed
+# it) now runs exclusively in roles/osot_finalize_cleanup.
+#
+# No -r/report-file flag here - unlike -optimize, that PDF's own
+# "Finalize command-line operation" section documents NO -r parameter for
+# -f (its only accepted arguments are the job-number list and
+# -reboot|-shutdown); an earlier version of this task passed one anyway
+# (copied from osot_optimize's own invocation without checking against the
+# real finalize syntax) - removed now that the primary source is in hand,
+# rather than leaving an undocumented argument in against a production VM.
+#
+# No -reboot/-shutdown flag passed to OSOT here, matching roles/cleanup's
+# own convention (see that role's header) - Packer's shutdown_command
+# handles power-off after the last provisioner task runs, this role
+# doesn't need to trigger its own. Neither job 9 nor job 10 needs a reboot
+# either (KMS/DNS state, not filesystem/servicing state), so this holds
+# after the split too.
+- name: Ensure OSOT is present on VM (idempotent copy)
+  ansible.windows.win_copy:
+    src: "{{ osot_installer }}"
+    dest: "C:\\Temp\\{{ osot_installer | basename }}"
+
+- name: Run OSOT Finalize pass (network/licensing jobs 9-10)
+  ansible.windows.win_shell: |
+    & "C:\Temp\{{ osot_installer | basename }}" -f {{ osot_finalize_job_numbers }}
+    if ($LASTEXITCODE -ne 0) { throw "OSOT Finalize exited with code $LASTEXITCODE" }
+  register: osot_finalize_result
+  changed_when: true
+
+- name: Show OSOT Finalize output
+  ansible.builtin.debug:
+    msg: "{{ osot_finalize_result.stdout_lines | default([]) }}"

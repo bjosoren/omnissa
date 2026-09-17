@@ -1,0 +1,56 @@
+---
+# roles/hardening/tasks/main.yml
+# Deliberately narrow. Carl Stalhood's Horizon RDS Host build guide (a
+# second reference cross-checked against the primary Omnissa Community
+# guide this project is otherwise built from) calls out two RDSH-specific
+# prep steps: setting the Remote Desktop licensing mode, and adding a login
+# group to Remote Desktop Users. Only the second is done here:
+#
+# RD licensing mode is deliberately NOT set by this role. Stalhood's own
+# guide sets it via Group Policy at the OU level, not locally on the host -
+# that's also the safer choice here, since I don't have a verified registry
+# path/value pair for it from a primary source (the two commonly-cited
+# paths for this setting disagree between Windows versions), and getting it
+# wrong silently would be worse than leaving it to the GPO you almost
+# certainly already have for your existing RDS farms. Confirm your
+# environment's licensing GPO covers this OU before a real deployment.
+#
+# Adding rdsh_login_group to local Remote Desktop Users was originally
+# attempted here directly, via ansible.windows.win_group_membership - a
+# real build failed with "account_name GU_HZ_HZRDSHP1 is not a valid
+# account, cannot get SID: ... Some or all identity references could not
+# be translated", and NOT because of a typo (the name was already
+# corrected and re-verified against ADUC before the second failure).
+# The real cause is structural: resolving a domain group's SID requires a
+# secure channel to the domain, which only exists after domain-join - and
+# per rdsh_2025_tpl.pkr.hcl's own header comment, this golden image is
+# deliberately NEVER domain-joined (Horizon instant-clone joins each
+# spawned host individually, at clone time, not the golden image itself).
+# The WinRM session here also authenticates as the local Administrator
+# build account, not a domain identity, so there's no fallback credential
+# path either. No spelling of rdsh_login_group fixes this - it cannot be
+# done locally on this image, full stop.
+#
+# This is exactly the same problem RD licensing mode (above) already
+# solves by deferring to Group Policy instead of a local setting - Carl
+# Stalhood's own guide (the second reference this project cross-checks
+# against) shows the local Computer Management approach but explicitly
+# offers Restricted Groups / Group Policy Preferences, scoped to the OU
+# Horizon joins spawned RDSH hosts into, as the alternative. That
+# alternative is the only one that actually works for an instant-clone
+# image that's never domain-joined, so this role now documents the
+# requirement instead of attempting - and failing - it locally.
+#
+# rdsh_login_group stays defined in inventory/group_vars/rdsh_2025_tpl.yml
+# purely as documentation of which group the GPO needs to target - it is
+# NOT consumed by any task anymore.
+- name: RDSH login group must be added to Remote Desktop Users via GPO, not here
+  ansible.builtin.debug:
+    msg: >-
+      rdsh_login_group ({{ rdsh_login_group | default('not set') }}) is NOT
+      added to local Remote Desktop Users by this build - it can't be, this
+      golden image is never domain-joined (see this role's header comment).
+      Add it via a Restricted Groups / Group Policy Preferences GPO scoped
+      to the OU Horizon joins spawned RDSH hosts into instead - same
+      approach already used for RD licensing mode. RDSH session logins
+      will fail for this group until that GPO exists and has applied.

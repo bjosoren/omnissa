@@ -1,0 +1,23 @@
+---
+# delete_vm.yml
+# Identical in every functional respect to images/ubt_2404_tpl/delete_vm.yml -
+# vCenter-API-only, no guest OS awareness. See that file's header comment
+# for the full explanation (why force: true, why vm_name is always passed
+# in rather than hardcoded, and the two call sites in scripts/build.sh this
+# backs).
+- name: Delete a VM by name
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Power off and delete {{ vm_name }}
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_server }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+        datacenter: "{{ vcenter_datacenter }}"
+        folder: "/{{ vcenter_datacenter }}/vm/{{ vcenter_folder }}"
+        name: "{{ vm_name }}"
+        state: absent
+        force: true

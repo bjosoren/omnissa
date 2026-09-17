@@ -1,0 +1,96 @@
+---
+# roles/osot_finalize_cleanup/tasks/main.yml
+# NEW ROLE 2026-09-16, per the user's explicit request, made while watching a
+# real build's OSOT Finalize pass run near the end of the pipeline: split
+# what used to be ONE OSOT Finalize invocation (roles/osot_finalize, see that
+# role's own header for its pre-split history) into TWO separate passes of
+# the same OmnissaHorizonOSOptimizationTool.exe -f CLI, with different job
+# numbers, run at two different points in the pipeline:
+#
+#   THIS role (osot_finalize_cleanup): jobs 0-7 - the disk/profile/log
+#   housekeeping jobs (NGEN, DISM Side-by-Side cleanup, Compact/CompactOS,
+#   Disk Cleanup, clear event logs, disable Superfetch, clear default user
+#   profile, zero empty disk space) - positioned BEFORE appvolumes in
+#   playbook.yml, i.e. before the App Volumes Agent install, per the user's
+#   own explicit instruction.
+#
+#   roles/osot_finalize (unchanged name, kept in its existing position after
+#   appvolumes): jobs 9-10 (Clear KMS Settings, Flush DNS cache) - the
+#   network/licensing-identity reset jobs, run LAST, right before
+#   hardening/cleanup/Packer's own shutdown_command - see that role's own
+#   header for why job 9 in particular is a reversal of an earlier explicit
+#   decision, flagged back to the user rather than silently changed. Job 11
+#   ("Release IP Address") was ALSO originally planned for this second pass
+#   but REMOVED the same day, before ever shipping - see that role's own
+#   header for the WinRM ConnectTimeoutError root cause and the Packer
+#   shutdown_command risk that drove the decision to drop it.
+#
+# Job 8 ("Creates local group policies", needs LGPO.exe) stays excluded from
+# BOTH passes, same as before the split - not wanted, not staged, per the
+# user's original 2026-09-11 decision (see inventory/group_vars/
+# rdsh_2025_tpl.yml's own comment on osot_finalize_cleanup_job_numbers /
+# osot_finalize_job_numbers).
+#
+# Why the user wanted this split at all: job 7 ("Zero empty disk space",
+# SDelete64.exe under the hood) can run for a long time on a large/
+# fragmented disk, and the user wants App Volumes installed only once that's
+# genuinely finished - not overlapping with it, and not just trusting this
+# task's own exit as proof it's done (see the dedicated wait-task below,
+# added same request). Separately, jobs 9-10 are specifically about network
+# identity (DNS) and KMS activation state - things you want reset as the
+# very LAST thing before the image goes cold for cloning, not staged
+# mid-pipeline before several more roles (appvolumes, hardening, cleanup)
+# still need to run their own WinRM-driven tasks over that same network
+# identity.
+- name: Ensure OSOT is present on VM (idempotent copy)
+  ansible.windows.win_copy:
+    src: "{{ osot_installer }}"
+    dest: "C:\\Temp\\{{ osot_installer | basename }}"
+
+- name: Stage SDelete64.exe into Windows\System32 (required for Finalize job 7)
+  ansible.windows.win_copy:
+    src: "{{ osot_finalize_sdelete64_installer }}"
+    dest: "C:\\Windows\\System32\\{{ osot_finalize_sdelete64_installer | basename }}"
+
+- name: Run OSOT Finalize pass (cleanup jobs 0-7)
+  ansible.windows.win_shell: |
+    & "C:\Temp\{{ osot_installer | basename }}" -f {{ osot_finalize_cleanup_job_numbers }}
+    if ($LASTEXITCODE -ne 0) { throw "OSOT Finalize (cleanup) exited with code $LASTEXITCODE" }
+  register: osot_finalize_cleanup_result
+  changed_when: true
+
+- name: Show OSOT Finalize (cleanup) output
+  ansible.builtin.debug:
+    msg: "{{ osot_finalize_cleanup_result.stdout_lines | default([]) }}"
+
+# ADDED 2026-09-16, per the user's own explicit follow-up request ("do not
+# proceed to app volumes if sdelete64.exe is running"): this task's own
+# blocking win_shell call above already waits for OmnissaHorizonOSOptimizationTool.exe's
+# OWN process to exit before returning - but OSOT is a closed-source vendor
+# tool, and there's no visibility into whether it genuinely waits on
+# SDelete64.exe as a normal child process, or fires it off as a background/
+# detached process and returns early once it's merely LAUNCHED. Given this
+# pipeline already hit exactly that failure shape once before with
+# roles/osot_optimize's own osot.exe invocation (see that role's own header
+# for the full Job-Object root cause), this doesn't assume OSOT's exit code
+# is sufficient proof SDelete64 actually finished - it verifies the real
+# process state on the guest directly, matching this project's own
+# established "verify real state, don't assume" pattern (same idea as
+# roles/osot_optimize's SessionId/htmlReport checks and roles/vmware_tools'
+# reboot-pending checks).
+#
+# retries: 480 / delay: 30 = 4 hours ceiling - deliberately generous, since
+# the user's own words were "sdelete kan take quite a long time" on this
+# disk. Adjust down if a real run shows it reliably finishes much sooner.
+- name: Wait for SDelete64.exe to finish before continuing (do not proceed to App Volumes while it's still running)
+  ansible.windows.win_shell: |
+    if (Get-Process -Name 'sdelete64' -ErrorAction SilentlyContinue) { "RUNNING" } else { "DONE" }
+  register: sdelete64_poll
+  until: (sdelete64_poll.stdout | trim) == 'DONE'
+  retries: 480
+  delay: 30
+  changed_when: false
+
+- name: Confirm SDelete64.exe has finished
+  ansible.builtin.debug:
+    msg: "SDelete64.exe is no longer running - safe to proceed to App Volumes install."
