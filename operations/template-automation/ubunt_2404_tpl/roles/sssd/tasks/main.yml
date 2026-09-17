@@ -1,0 +1,42 @@
+---
+# Step 5: the easy-setup wizard (or realmd, when this project used it) used
+# to leave use_fully_qualified_names=True and the default homedir path.
+# Both need overriding here so short usernames resolve and the homedir path
+# matches the NFS mount point - and, critically, so the UID this box computes
+# for a given AD user matches what the NFS server computes for the same user.
+#
+# access_provider/simple_allow_groups also does Step 7's job (restricting
+# logins to the pool's AD group) directly, rather than through realmd's
+# `realm deny --all` / `realm permit -g <group>` - those are realmd
+# subcommands, and this project no longer uses realmd (domain_join now joins
+# via Samba's `net ads join` instead - see that role's comments for why).
+# realmd's access-control commands work by writing exactly these two sssd.conf
+# keys anyway, so this just sets them directly: one less package, one less
+# tool, same restriction. See roles/realm_restrict for where Step 7 went.
+- name: Deploy sssd.conf
+  ansible.builtin.copy:
+    dest: /etc/sssd/sssd.conf
+    mode: "0600"
+    content: |
+      [sssd]
+      domains = {{ domain_fqdn }}
+      config_file_version = 2
+      services = nss, pam
+
+      [domain/{{ domain_fqdn }}]
+      default_shell = /bin/bash
+      krb5_store_password_if_offline = True
+      cache_credentials = True
+      krb5_realm = {{ domain_fqdn | upper }}
+      id_provider = ad
+      fallback_homedir = /home/%u
+      ad_domain = {{ domain_fqdn }}
+      use_fully_qualified_names = False
+      ldap_id_mapping = True
+      access_provider = simple
+      simple_allow_groups = {{ linux_login_group }}
+      dyndns_update = False
+  notify: restart sssd and clear cache
+
+- name: Flush handlers so SSSD is using the new config before later roles run
+  ansible.builtin.meta: flush_handlers

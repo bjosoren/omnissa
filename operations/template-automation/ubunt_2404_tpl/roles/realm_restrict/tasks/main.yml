@@ -1,0 +1,19 @@
+---
+# Step 7 (former): this role used to run `realm deny --all` / `realm permit
+# -g <group>` to restrict logins to the pool's AD group - but those are
+# realmd subcommands, and this project no longer uses realmd (domain_join now
+# joins via Samba's `net ads join` instead - see that role's comments for
+# why). realmd's access-control commands work by writing sssd.conf's own
+# access_provider/simple_allow_groups keys anyway, so rather than keep a
+# realmd dependency around for just this one step, the sssd role now writes
+# those keys directly - one less package, one less tool, same restriction.
+# This role is kept as a deliberate no-op (rather than removed from
+# playbook.yml outright) so anyone matching the manual procedure's numbered
+# steps against this automation can still find "Step 7" and see exactly
+# where its job went.
+- name: Step 7 is now handled directly by the sssd role
+  ansible.builtin.debug:
+    msg: >-
+      No-op - login restriction to the pool's AD group is set by
+      roles/sssd/tasks/main.yml (access_provider = simple,
+      simple_allow_groups = {{ linux_login_group }}).

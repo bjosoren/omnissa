@@ -1,0 +1,42 @@
+---
+# Step 1 of the manual procedure: fix the installer's 127.0.1.1 /etc/hosts
+# entry, disable IPv6, and bring the base install up to date.
+
+- name: Replace the installer's 127.0.1.1 hosts entry with the real IP/FQDN
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1\s'
+    line: "{{ ansible_default_ipv4.address }}\t{{ guest_hostname }}.{{ domain_fqdn }}\t{{ guest_hostname }}"
+    state: present
+
+- name: Disable IPv6 (sysctl)
+  ansible.posix.sysctl:
+    name: "{{ item }}"
+    value: "1"
+    sysctl_file: /etc/sysctl.conf
+    reload: true
+  loop:
+    - net.ipv6.conf.all.disable_ipv6
+    - net.ipv6.conf.default.disable_ipv6
+    - net.ipv6.conf.lo.disable_ipv6
+
+# The sysctl above only stops FUTURE IPv6 address assignment - it doesn't
+# retroactively strip an address the interface already picked up before
+# this task ran. And it always has one by this point: cloud-init/networkd
+# bring the guest NIC up (self-assigning a link-local fe80:: address via
+# SLAAC, which happens regardless of this sysctl) before Ansible can even
+# connect over SSH in the first place, since that connectivity is what
+# Ansible needs to reach the guest at all. Confirmed live: a spawned VDI's
+# own vCenter guest summary still listing an fe80:: address. Harmless
+# either way (link-local isn't routable off the local subnet) but cheap to
+# close properly here rather than leave dangling.
+- name: Flush any IPv6 address the interface already picked up before the sysctl above applied
+  ansible.builtin.command: ip -6 addr flush dev "{{ ansible_default_ipv4.interface }}" scope link
+  changed_when: false
+  failed_when: false
+
+- name: Full apt upgrade
+  ansible.builtin.apt:
+    update_cache: true
+    upgrade: dist
+    cache_valid_time: 3600

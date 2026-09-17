@@ -1,0 +1,155 @@
+---
+# Step 12: clear temp files. This is the last role in playbook.yml on
+# purpose. Powering off is deliberately NOT done here - it's left to
+# Packer's own shutdown_command (in ubt_2404_tpl.pkr.hcl), which SSHes in
+# after every provisioner finishes and waits for the VM to actually reach
+# a powered-off state before scripts/build.sh takes the final snapshot. Two
+# independent shutdown paths racing each other (one from Ansible, one from
+# Packer) is more likely to confuse the vsphere-iso builder than help it.
+- name: Clear /tmp
+  ansible.builtin.shell: rm -rf /tmp/* /tmp/.[!.]*
+  changed_when: true
+  failed_when: false
+
+# Removes the apt pin user-data.pkrtpl.hcl's `apt: preferences:` key sets
+# up to work around a real archive-mirror desync (archive.ubuntu.com vs
+# security.ubuntu.com briefly disagreeing on the linux-generic/linux-image-
+# generic metapackages) that was breaking curtin's install-kernel step on
+# every attempt. curtin itself renders that `preferences:` config to this
+# exact path (curtin/commands/apt_config.py's APT_PREFERENCES_FN constant -
+# not something we chose, so don't rename this task's path without checking
+# curtin's source again). That pin only needs to exist for apt runs during/
+# shortly after install - leaving it in the shipped golden image would
+# permanently deprioritize security.ubuntu.com behind archive.ubuntu.com for
+# every future apt run on every desktop cloned from this image, which could
+# someday shadow a real security fix. Being the last role, cleanup is the
+# right place to remove it rather than somewhere earlier that might run
+# before the base role's own apt upgrade is done using it.
+#
+# /etc/apt/apt.conf.d/94curtin-config (the `apt: conf:` retries/timeouts/
+# ForceIPv4 settings, same file) is NOT removed here - those are fine to
+# keep permanently, unlike the security-mirror pin above.
+- name: Remove the temporary archive-over-security apt pin
+  ansible.builtin.file:
+    path: /etc/apt/preferences.d/90curtin.pref
+    state: absent
+
+# Real evidence this is needed: hz-ubt-r-01, a live Horizon-spawned VDI,
+# showing IP 198.51.100.150 in vCenter's own guest summary - the pinned
+# guest_ip_cidr address group_vars reserves for the BUILD VM, not
+# something DHCP assigned it. That's because http/user-data.pkrtpl.hcl's
+# autoinstall network: section writes a static netplan config (dhcp4:
+# false, addresses: [guest_ip_cidr]) to get the guest onto a predictable,
+# known-reachable address DURING the build - Packer's own SSH connection to
+# it depends on that being static and stable. Nothing before this task ever
+# reverted that once the build no longer needs it, so it shipped as a
+# permanent part of the golden image: every clone made from it - the
+# published VM from post_build_snapshot.yml AND every Horizon instant-clone
+# VDI forked from that - boots with this exact same hardcoded address,
+# guaranteed to collide the moment more than one is live at once.
+#
+# The grep+fail pair below exists because this task can't be verified
+# without a real build (no test environment for this project), and a wrong
+# path here would silently ship a no-op fix rather than an error - cheaper
+# to fail loudly, inside this same build run, the moment the assumption
+# turns out wrong than to discover it later from another live-IP collision.
+# It already caught one wrong guess: 00-installer-config.yaml (subiquity's
+# own installer-time output, and the first guess here) is NOT where this
+# ends up - a real build's grep found /etc/netplan/50-cloud-init.yaml
+# instead, cloud-init's own standard netplan output filename. Makes sense
+# in hindsight: the autoinstall network: key is processed by cloud-init's
+# network-config stage, not written directly by subiquity/curtin the way
+# the apt: preferences.d pin above is - so cloud-init's own renderer, and
+# its own filename convention, is what actually lands on disk.
+- name: Confirm which netplan file currently holds the static build-time config
+  ansible.builtin.command: grep -rl "{{ guest_ip_cidr }}" /etc/netplan/
+  register: static_netplan_file
+  changed_when: false
+  failed_when: false
+
+- name: Fail loudly if the static config isn't where this task expects it
+  ansible.builtin.fail:
+    msg: >-
+      Expected /etc/netplan/50-cloud-init.yaml to be the only file
+      holding the static guest_ip_cidr config autoinstall wrote, so the
+      DHCP-revert task below overwrites the right file. grep across
+      /etc/netplan/ instead found it in: {{ static_netplan_file.stdout_lines }}
+      (empty list means not found anywhere). Update the dest: path in the
+      next task to match before trusting this fix, then re-run.
+  when: static_netplan_file.stdout_lines != ['/etc/netplan/50-cloud-init.yaml']
+
+# Overwrites the SAME file autoinstall wrote (see the grep/fail pair above)
+# rather than adding a second netplan file - avoids any ambiguity about
+# which file's dhcp4/addresses keys win for this device. File-only: no
+# `netplan apply`, no interface bounce, no reboot, so the guest's actual
+# running network config - and therefore Packer's live SSH session to it,
+# including its own shutdown_command run right after this - is completely
+# unaffected. Only the NEXT boot (the published clone's first boot, or any
+# Horizon-forked VDI's) picks up this file's new content. renderer:
+# networkd is kept deliberately, matching user-data.pkrtpl.hcl's own
+# reasoning (a real build caught NetworkManager transiently dropping a
+# static profile around the Horizon Agent reboot) - no reason to introduce
+# a second renderer this late for what's now a plain DHCP profile.
+# link-local: [ipv4] is the one key that actually stops this device from
+# getting an fe80:: address on every future boot - added after a real
+# spawned VDI confirmed roles/base's sysctl+flush task (which only ever
+# cleared an address already assigned during THIS build's own boot) does
+# not prevent that VDI's own, independent boot from picking a fresh one
+# right back up. systemd-networkd assigns IPv6 link-local addressing by
+# default regardless of net.ipv6.conf.*.disable_ipv6 - that sysctl affects
+# routable/global addressing, not networkd's own link-local behavior -
+# and netplan's link-local key is the actual, documented opt-out for it.
+# Left in place as defense in depth even though this key alone should now
+# make it redundant for anything cloned from this file.
+#
+# dhcp-identifier: mac fixes a DIFFERENT bug from everything above: two
+# real VDIs from two different pools (hz-ubt-02, MAC ...ec:6b, and
+# hz-ubt-r-01, MAC ...22:7d - confirmed genuinely different in vCenter's
+# own Edit Settings) both landing on the exact same DHCP-leased address,
+# 198.51.100.145, while both powered on at once. Not a MAC problem (that's
+# long since fixed and confirmed working here) and not a netplan-not-being-
+# applied problem either - it's that systemd-networkd's DHCPv4 client does
+# NOT identify itself to the server by MAC by default; with no
+# dhcp-identifier set it generates an RFC4361 client identifier derived
+# from /etc/machine-id instead, and every clone made from this image's
+# snapshot inherits the exact same /etc/machine-id. Two different MACs can
+# still present the same DHCP client identifier to the server, and most
+# DHCP servers (this one included, going by the evidence) key leases by
+# client identifier over MAC when both are present - so the server just
+# hands the one lease to whichever clone asked most recently. Confirmed
+# against netplan's own docs: dhcp-identifier: mac (networkd-backend only,
+# which is what renderer: networkd above already commits to) makes it
+# identify by MAC instead, same as it always did before this bug was even
+# possible to hit. The alternative fix - regenerating /etc/machine-id on
+# every clone's first boot - was deliberately not used here: it needs its
+# own first-boot mechanism to actually run per clone (nothing in this
+# pipeline currently provides one for Horizon instant clones the way
+# cloud-init would for a freshly-booted cloud image), and touches
+# journald/D-Bus machine identity along with it - this netplan key gets
+# the one thing that's actually broken (DHCP identification) fixed
+# directly, without any of that.
+- name: Revert the golden image's netplan config to DHCP (file only, not applied)
+  ansible.builtin.copy:
+    dest: /etc/netplan/50-cloud-init.yaml
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      # Written by roles/cleanup at the end of the build - overrides the
+      # static config http/user-data.pkrtpl.hcl's autoinstall network:
+      # section wrote here during install. That static address only ever
+      # existed for Packer's own build-time SSH session; every clone made
+      # from this image gets its own address the normal way from here on,
+      # matching how AD identity/hostname/MAC already work per clone.
+      network:
+        version: 2
+        renderer: networkd
+        ethernets:
+          builder0:
+            match:
+              name: "en*"
+            set-name: eth0
+            dhcp4: true
+            dhcp6: false
+            link-local: [ipv4]
+            dhcp-identifier: mac

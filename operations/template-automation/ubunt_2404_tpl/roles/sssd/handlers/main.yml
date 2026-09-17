@@ -1,0 +1,10 @@
+---
+# One handler that does both steps - chaining a notify from inside a handler
+# to fire a second handler isn't reliable across Ansible versions unless
+# ANSIBLE_HANDLERS_NOTIFY_FROM_HANDLERS is set, so keep this as one task.
+- name: restart sssd and clear cache
+  ansible.builtin.shell: |
+    set -e
+    sss_cache -E
+    systemctl restart sssd
+  changed_when: true

@@ -1,0 +1,52 @@
+---
+# Step 4 (agent half): stage the Omnissa-provided tarball and run the
+# non-interactive installer directly (install_viewagent.sh), rather than the
+# easyinstall_viewagent.sh wizard the manual procedure uses - that wizard
+# doesn't have a documented unattended mode, install_viewagent.sh does
+# (see variables.pkr.hcl's horizon_agent_install_flags for the one mandatory
+# flag, -A yes to accept the EULA; add others per Omnissa's own
+# "Command-line Options for Installing Horizon Agent for Linux" doc for your
+# agent version).
+
+- name: Copy the Horizon Agent tarball to the guest
+  ansible.builtin.copy:
+    src: "{{ horizon_agent_tarball }}"
+    dest: /tmp/horizon-agent.tar.gz
+    mode: "0644"
+
+- name: Extract the Horizon Agent tarball
+  ansible.builtin.unarchive:
+    src: /tmp/horizon-agent.tar.gz
+    dest: /tmp
+    remote_src: true
+
+- name: Find the extracted Horizon Agent directory
+  ansible.builtin.find:
+    paths: /tmp
+    patterns: "Omnissa-horizonagent-linux-*"
+    file_type: directory
+  register: horizon_agent_dir
+
+- name: Run the Horizon Agent installer non-interactively
+  ansible.builtin.command:
+    cmd: "./install_viewagent.sh {{ horizon_agent_install_flags }}"
+    chdir: "{{ horizon_agent_dir.files[0].path }}"
+  register: horizon_install
+  changed_when: "'installed' in horizon_install.stdout | lower or horizon_install.rc == 0"
+
+- name: Reboot after Horizon Agent installation
+  ansible.builtin.reboot:
+    reboot_timeout: 600
+
+- name: Verify the Horizon Agent service is running
+  ansible.builtin.systemd:
+    name: viewagent.service
+    state: started
+  register: viewagent_status
+
+- name: Fail early if the Horizon Agent service didn't come up
+  ansible.builtin.assert:
+    that: viewagent_status.status.ActiveState == "active"
+    fail_msg: >-
+      viewagent.service is not active after install - check
+      /tmp/vmware-viewagent-*.log on the guest before continuing.

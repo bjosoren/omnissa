@@ -1,0 +1,32 @@
+---
+# delete_vm.yml
+# Run against localhost. Powers off (if needed) and permanently deletes a
+# single VM by name - {{ vm_name }} is passed in by the caller (build.sh)
+# and never hardcoded, since this same file backs two different prompts:
+# clearing out a leftover build VM (ubt-2404-tpl) before a fresh build
+# starts if one is already sitting in vCenter, and clearing it out again
+# after a successful build+publish, on request.
+#
+# force: true is defense-in-depth, not the expected case: by the time
+# either prompt this backs can run, ubt-2404-tpl should already be
+# powered off (Packer's own shutdown_command waits for that - see
+# ubt_2404_tpl.pkr.hcl - and it's the precondition post_build_snapshot.yml's
+# clone task needs), but force: true means this still works correctly if
+# it's been manually powered on for troubleshooting in between.
+- name: Delete a VM by name
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Power off and delete {{ vm_name }}
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_server }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+        datacenter: "{{ vcenter_datacenter }}"
+        folder: "/{{ vcenter_datacenter }}/vm/{{ vcenter_folder }}"
+        name: "{{ vm_name }}"
+        state: absent
+        force: true

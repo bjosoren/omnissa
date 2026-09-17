@@ -1,0 +1,93 @@
+---
+# Step 8: applications available to every user in the pool. This is the one
+# role you'll likely edit per environment - trim or extend the package list
+# to match what your pool actually needs.
+- name: Install PuTTY and Nemo
+  ansible.builtin.apt:
+    name:
+      - putty
+      - nemo
+    state: present
+
+- name: Set Nemo as the default file manager (system-wide)
+  ansible.builtin.copy:
+    dest: /usr/share/applications/mimeapps.list
+    mode: "0644"
+    content: |
+      [Default Applications]
+      inode/directory=nemo.desktop
+      application/x-gnome-saved-search=nemo.desktop
+
+# copy's dest never creates missing parent directories (unlike some other
+# modules) - /etc/skel/.config doesn't exist yet at this point on a fresh
+# autoinstall (nothing before Step 8 creates it; gnome_setup, which might
+# otherwise seed it, doesn't run until Step 10), so this needs its own
+# explicit mkdir first - confirmed live: this copy failed outright with
+# "Destination directory /etc/skel/.config does not exist" without it.
+- name: Ensure /etc/skel/.config exists
+  ansible.builtin.file:
+    path: /etc/skel/.config
+    state: directory
+    mode: "0755"
+
+- name: Set Nemo as default for new user home directories too
+  ansible.builtin.copy:
+    dest: /etc/skel/.config/mimeapps.list
+    mode: "0644"
+    content: |
+      [Default Applications]
+      inode/directory=nemo.desktop
+      application/x-gnome-saved-search=nemo.desktop
+
+- name: Ensure /etc/apt/keyrings exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Download Google Chrome's signing key
+  ansible.builtin.get_url:
+    url: https://dl-ssl.google.com/linux/linux_signing_key.pub
+    dest: /tmp/google.pub
+    mode: "0644"
+
+# apt_key is deprecated/removed in current Ansible - dearmor it by hand into
+# a keyring apt's signed-by can point at directly, same as the manual
+# procedure's own gpg --dearmor command.
+- name: Dearmor the key into /etc/apt/keyrings
+  ansible.builtin.command:
+    cmd: gpg --no-default-keyring --keyring /etc/apt/keyrings/google-chrome.gpg --import /tmp/google.pub
+    creates: /etc/apt/keyrings/google-chrome.gpg
+
+- name: Add Google Chrome's apt repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/google-chrome.list
+    mode: "0644"
+    content: "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main\n"
+
+- name: Install Google Chrome
+  ansible.builtin.apt:
+    name: google-chrome-stable
+    state: present
+    update_cache: true
+
+- name: Check for a locally staged Devolutions Remote Desktop Manager .deb
+  ansible.builtin.find:
+    paths: "{{ playbook_dir }}/files"
+    patterns: "RemoteDesktopManager_*_amd64.deb"
+  register: rdm_deb
+  delegate_to: localhost
+  become: false
+
+- name: Copy and install Remote Desktop Manager, if staged
+  when: rdm_deb.files | length > 0
+  block:
+    - name: Copy the RDM .deb to the guest
+      ansible.builtin.copy:
+        src: "{{ rdm_deb.files[0].path }}"
+        dest: /tmp/rdm.deb
+        mode: "0644"
+
+    - name: Install RDM
+      ansible.builtin.apt:
+        deb: /tmp/rdm.deb

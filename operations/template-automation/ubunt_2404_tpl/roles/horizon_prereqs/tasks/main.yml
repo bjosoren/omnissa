@@ -1,0 +1,17 @@
+---
+# Step 3: dependency packages required before running the Horizon Agent
+# installer. Cross-check this list against Omnissa's own "Install Linux
+# Dependency Packages for Horizon Agent" doc for whatever agent version
+# horizon_agent_tarball actually is - it does shift between releases.
+- name: Install Horizon Agent dependency packages
+  ansible.builtin.apt:
+    name:
+      - libnss3-tools
+      - pulseaudio-utils
+      - ca-certificates
+      - curl
+      - gpg
+      - apt-transport-https
+      - software-properties-common
+    state: present
+    update_cache: true

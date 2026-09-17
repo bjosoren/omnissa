@@ -1,0 +1,131 @@
+---
+# post_build_snapshot.yml
+# Run against localhost (talks to the vCenter API, not the guest) once Packer
+# has finished and the build VM (vm_name) is powered off. Invoked by
+# scripts/build.sh - not meant to be run inside the Packer build itself,
+# since Packer's vsphere-iso builder doesn't return control until the VM is
+# confirmed powered off, which is exactly the precondition this needs.
+#
+# Two steps, on two different VMs - this split is a fix for a real
+# production failure, not the original design. The original version of this
+# file snapshotted vm_name directly, and scripts/build.sh gave vm_name itself
+# a fresh gi-ubt2404-<YYYYMMDD-HHMMSS> name on every run. That worked right
+# up until a build's finished VM actually got published to the Horizon pool:
+# Horizon "locks" it as the pool's base image, but it kept holding the exact
+# same pinned MAC/static IP (mac_address/guest_ip_cidr in group_vars) that
+# the NEXT build's freshly autoinstalled guest also configured - two live
+# VMs fighting over one network identity, which is what caused that run's
+# intermittent "ssh: handshake failed: EOF" / "dial tcp ...:22 i/o timeout"
+# failures right after the Horizon Agent install reboot. vm_name is now a
+# fixed, reused name (see ubt_2404_tpl.pkr.hcl's header and
+# variables.pkr.hcl's comments) specifically so that pinned identity only
+# ever lives on ONE VM - which means the thing actually handed to Horizon
+# now has to be a separate VM, created here, not vm_name itself.
+- name: Clone the build VM, then snapshot the clone for Horizon
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    # A FULL clone (linked_clone: false), not a linked clone - a linked
+    # clone stays dependent on vm_name's own disk chain, and vm_name gets
+    # destroyed and rebuilt from scratch by `packer build -force` on every
+    # future run (see scripts/build.sh). A linked clone would either block
+    # that destroy or silently corrupt itself the moment it happened.
+    #
+    # No mac_address given in the networks entry below - the intent is the
+    # same as the comment above (let vCenter assign this clone its own
+    # fresh MAC so it never collides with vm_name's pinned one), but on its
+    # own this doesn't actually deliver that: a real build confirmed the
+    # clone still came up with the exact same MAC as vm_name, address type
+    # "Manual" (Edit Settings on the clone showed the pinned
+    # 00:50:56:00:12:34, not auto-generated). Omitting mac_address here only
+    # means "don't ask for a SPECIFIC different address" - vSphere clones an
+    # adapter whose source is set to Manual by copying its device config
+    # verbatim, MAC included, unless something explicitly tells it
+    # otherwise (a long-standing, documented behavior - see
+    # github.com/ansible/ansible issue #64774, "vmware_guest clone from
+    # template will keep same MAC as the template"; community.vmware's own
+    # vmware_guest module has no networks-list option to force an adapter
+    # back to auto-generated). The single task below, after the clone, is
+    # the actual fix - see set_nic_automatic.py's own header for why it's a
+    # raw pyVmomi reconfigure rather than another vmware_guest_network call:
+    # an earlier delete-then-recreate version of this fix (two
+    # vmware_guest_network tasks) reported success on every real build but
+    # never actually changed the adapter's address type away from Manual -
+    # confirmed directly via Edit Settings on both the published clone and
+    # every VDI Horizon spawned from it. The one operation confirmed (by a
+    # real manual fix, then reproduced here) to actually work is a single
+    # in-place reconfigure of the SAME device, exactly what vCenter's own
+    # Edit Settings "MAC Address: Automatic" dropdown does.
+    #
+    # No `customization:` block here on purpose - this needs to be a
+    # byte-for-byte copy of vm_name's guest state (AD-joined machine
+    # account and /etc/krb5.keytab, installed Horizon Agent, everything
+    # playbook.yml configured), not a re-customized one. The guest OS's own
+    # hostname (guest_hostname, e.g. "ubt-2404-tpl") staying the same on this
+    # differently-named vCenter object is expected and harmless, exactly
+    # like it already was for the plain gi-ubt2404-<timestamp> VM in the old
+    # one-VM design - Horizon's own instant-clone forking assigns each
+    # spawned desktop its own identity separately and never boots this
+    # parent VM itself.
+    #
+    # state: poweredoff, not present - the clone must never be powered on by
+    # this pipeline (or anything else): Horizon instant clones fork
+    # directly off this VM's disk/snapshot without booting it, and powering
+    # it on would immediately recreate the exact static-IP/hostname
+    # collision this whole change exists to avoid, just against a
+    # differently-MAC'd VM instead of vm_name.
+    - name: Clone {{ vm_name }} to the published VM {{ published_vm_name }}
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_server }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+        datacenter: "{{ vcenter_datacenter }}"
+        cluster: "{{ vcenter_cluster }}"
+        datastore: "{{ vcenter_datastore }}"
+        folder: "/{{ vcenter_datacenter }}/vm/{{ vcenter_folder }}"
+        name: "{{ published_vm_name }}"
+        template: "{{ vm_name }}"
+        is_template: false
+        linked_clone: false
+        networks:
+          - name: "{{ vcenter_network }}"
+        state: poweredoff
+        wait_for_ip_address: false
+
+    # Flips the NIC the clone above inherited verbatim from vm_name - same
+    # MAC (mac_address, the pinned 00:50:56:00:12:34), same "Manual"
+    # address type - to "Automatic" via a single in-place reconfigure of
+    # that same device (see set_nic_automatic.py's header for the full
+    # story of why this replaced a two-task delete/recreate approach that
+    # looked right per community.vmware.vmware_guest_network's own docs but
+    # didn't actually work). VC_VM_NAME is deliberately the published
+    # clone, never vm_name itself - vm_name keeps its own pinned MAC/IP
+    # (see the header comment above) precisely so the DHCP reservation for
+    # it keeps working across every rebuild.
+    - name: Flip the published clone's inherited NIC to Automatic MAC
+      ansible.builtin.script: "{{ playbook_dir }}/set_nic_automatic.py"
+      environment:
+        VC_HOST: "{{ vcenter_server }}"
+        VC_USER: "{{ vcenter_username }}"
+        VC_PASSWORD: "{{ vcenter_password }}"
+        VC_VM_NAME: "{{ published_vm_name }}"
+      register: nic_fix
+      changed_when: "'After reconfigure' in nic_fix.stdout"
+
+    - name: Create the instant-clone snapshot on the published clone
+      community.vmware.vmware_guest_snapshot:
+        hostname: "{{ vcenter_server }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+        datacenter: "{{ vcenter_datacenter }}"
+        folder: "/{{ vcenter_datacenter }}/vm/{{ vcenter_folder }}"
+        name: "{{ published_vm_name }}"
+        state: present
+        snapshot_name: "{{ published_vm_name }}"
+        description: "Golden image build - {{ published_vm_name }} (cloned from {{ vm_name }})"
+        quiesce: false
+        memory_dump: false

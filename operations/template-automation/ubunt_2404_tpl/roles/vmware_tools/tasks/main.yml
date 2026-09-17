@@ -1,0 +1,18 @@
+---
+# Step 2: open-vm-tools-desktop and openssh-server are already in the
+# autoinstall "packages" list, so this just confirms them - it's here so the
+# project stays correct even if someone trims the autoinstall package list
+# later without checking this role.
+
+- name: Ensure open-vm-tools-desktop and openssh-server are installed
+  ansible.builtin.apt:
+    name:
+      - open-vm-tools-desktop
+      - openssh-server
+    state: present
+
+- name: Ensure open-vm-tools service is running and enabled
+  ansible.builtin.systemd:
+    name: open-vm-tools
+    state: started
+    enabled: true

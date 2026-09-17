@@ -1,0 +1,20 @@
+---
+# Step 10: remove the GNOME first-run wizard and pre-seed the "already done"
+# flag into /etc/skel so it's set for every new home directory automatically.
+- name: Remove gnome-initial-setup
+  ansible.builtin.apt:
+    name: gnome-initial-setup
+    state: absent
+    autoremove: true
+
+- name: Ensure /etc/skel/.config exists
+  ansible.builtin.file:
+    path: /etc/skel/.config
+    state: directory
+    mode: "0755"
+
+- name: Mark gnome-initial-setup as already done for new users
+  ansible.builtin.copy:
+    dest: /etc/skel/.config/gnome-initial-setup-done
+    content: "yes\n"
+    mode: "0644"

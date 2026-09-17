@@ -1,0 +1,51 @@
+---
+# preflight_check_vm.yml
+# Run against localhost before Packer starts. Answers one question for
+# scripts/build.sh: does a VM named {{ vm_name }} (the fixed, reused build
+# VM - see variables.pkr.hcl's vm_name comment) already exist in vCenter?
+# Ansible isn't a good fit for an interactive yes/no prompt, so that stays
+# in the shell script - this playbook only writes the answer to a small
+# JSON file for build.sh to read, the same pattern resolve_vars.yml already
+# uses for .packer_vars.json.
+#
+# packer build -force later in build.sh would happily destroy-and-recreate
+# this VM on its own, silently, if it already exists - that's exactly what
+# -force means (see ubt_2404_tpl.pkr.hcl/variables.pkr.hcl's comments on
+# why a fixed, reused name needs it). This check exists purely to put a
+# visible, human checkpoint in front of that instead of leaving it entirely
+# automatic: build.sh looks this up first, and if the VM is there, asks
+# before touching it.
+#
+# Using vmware_vm_info with a client-side name filter, rather than querying
+# vmware_guest_info directly for {{ vm_name }}: vmware_guest_info's
+# behavior when the named VM does NOT exist isn't documented one way or the
+# other (whether the task fails or returns an empty result), and getting
+# that wrong here would either silently skip the safety prompt or break
+# every fresh environment where the VM legitimately doesn't exist yet (e.g.
+# the very first build in a new environment). vmware_vm_info is documented
+# to return an empty list on no match and never error, which is exactly the
+# safe behavior a pre-flight existence check needs.
+- name: Check whether the build VM already exists
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: List VMs in the target folder
+      community.vmware.vmware_vm_info:
+        hostname: "{{ vcenter_server }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+        folder: "/{{ vcenter_datacenter }}/vm/{{ vcenter_folder }}"
+      register: vm_list
+
+    - name: Determine whether {{ vm_name }} is among them
+      ansible.builtin.set_fact:
+        vm_already_exists: "{{ (vm_list.virtual_machines | selectattr('guest_name', 'equalto', vm_name) | list | length) > 0 }}"
+
+    - name: Write the result for build.sh to read
+      ansible.builtin.copy:
+        dest: "{{ check_result_file }}"
+        content: "{{ {'exists': vm_already_exists} | to_nice_json }}"
+        mode: '0600'

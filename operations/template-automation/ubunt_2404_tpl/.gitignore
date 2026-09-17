@@ -1,0 +1,16 @@
+# Never commit the Horizon Agent tarball or any staged installer - large
+# binary, and Omnissa's own EULA/download terms apply to redistributing it.
+files/*.tar.gz
+files/*.deb
+
+# Transient, contains plaintext secrets briefly - scripts/build.sh shreds it,
+# but keep it out of git regardless.
+.packer_vars.json
+
+# Packer's own local state
+.packer_cache/
+packer_cache/
+
+# scripts/build.sh's per-run transcripts - useful for troubleshooting locally,
+# not meant to be committed (may reference internal hostnames/IPs).
+logs/

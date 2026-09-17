@@ -1,0 +1,26 @@
+---
+# playbook.yml
+# Run by Packer's ansible provisioner against the freshly autoinstalled VM.
+# Each role maps to one numbered step in the manual procedure at
+# https://tech.iot-it.no/omnissa-horizon-ubuntu-24-04-desktop-instant-clone-template/
+# - the comment on each role says which step it replaces.
+- name: Build the Ubuntu 24.04 Omnissa Horizon golden image
+  hosts: all
+  become: true
+  gather_facts: true
+
+  roles:
+    - role: base            # Step 1 - /etc/hosts fix, disable IPv6, apt upgrade
+    - role: vmware_tools     # Step 2 - confirm open-vm-tools-desktop + SSH
+    - role: horizon_prereqs  # Step 3 - Horizon Agent dependency packages
+    - role: domain_join      # Step 4 (domain-join half) - realm/adcli join, done
+                              # separately from the agent installer so it's scriptable
+    - role: horizon_agent    # Step 4 (agent half) - install_viewagent.sh, non-interactive
+    - role: sssd             # Step 5 - short usernames, matching NFS UID mapping
+    - role: nfs_home         # Step 6 - pam_mount + NFS home directories
+    - role: realm_restrict   # Step 7 - realm deny --all / permit -g <pool group>
+    - role: apps             # Step 8 - Chrome, PuTTY, Nemo, RDM
+    - role: hardening        # Step 9 - disable unattended-upgrades/apt timers
+    - role: gnome_setup      # Step 10 - remove gnome-initial-setup wizard
+    - role: sudoers          # Step 11 - grant sudo to the pool's AD group
+    - role: cleanup          # Step 12 - clear /tmp, shut down for snapshotting

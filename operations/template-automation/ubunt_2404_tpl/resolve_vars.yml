@@ -1,0 +1,69 @@
+---
+# resolve_vars.yml
+# Rather than re-implementing YAML+Jinja parsing in scripts/build.sh, this
+# play asks Ansible to do that resolution and hand the results back as JSON.
+# It relies on scripts/build.sh passing group_vars/all.yml, group_vars/all/
+# vault.yml and this project's own group_vars/ubt_2404_tpl.yml in explicitly
+# via -e "@file" - same as every other Ansible run against this platform
+# (see post_build_snapshot.yml and the packer ansible provisioner's
+# extra_arguments). Ansible does NOT auto-load group_vars/ here: this
+# playbook lives under images/ubt_2404_tpl/, not next to the inventory, so
+# its automatic group_vars/host_vars discovery never finds
+# inventory/group_vars/ on its own - hence the explicit -e "@file" flags.
+# Once loaded, the {{ vault_... }} Jinja references inside group_vars/all.yml
+# resolve against the decrypted vault normally. connection: local means this
+# never actually talks to ansible_host, which matters here since the VM named
+# in hosts.ini for this group may not exist yet the first time this runs.
+- name: Resolve platform + project vars for scripts/build.sh and scripts/publish_to_pool.sh
+  hosts: ubt_2404_tpl
+  connection: local
+  gather_facts: false
+
+  tasks:
+    # horizon_agent_install_flags and mac_address are the two keys below with
+    # a `| default(...)` fallback - both have their own default in
+    # variables.pkr.hcl ("-A yes", and "" for auto-assigned MAC) and were
+    # never meant to be required group_vars entries, only optional overrides.
+    # The four horizon_* / vault_horizon_api_password keys at the bottom are
+    # also defaulted to '' - they're only consumed by publish_to_pool.sh, not
+    # build.sh, so an environment that never uses the publish script
+    # shouldn't be forced to fill them in. Every other key here IS required
+    # in group_vars/all.yml or this project's own group_vars/ubt_2404_tpl.yml
+    # - if one of those is missing, Ansible will fail with "'<name>' is
+    # undefined" pointing at exactly which one to add.
+    - name: Write resolved vars to a local, root-only JSON file
+      ansible.builtin.copy:
+        dest: "{{ playbook_dir }}/.packer_vars.json"
+        mode: "0600"
+        content: >-
+          {{ {
+            'vcenter_server': vcenter_server,
+            'vcenter_username': vcenter_username,
+            'vcenter_password': vcenter_password,
+            'vcenter_datacenter': vcenter_datacenter,
+            'vcenter_cluster': vcenter_cluster,
+            'vcenter_datastore': vcenter_datastore,
+            'vcenter_folder': vcenter_folder,
+            'vcenter_network': vcenter_network,
+            'vm_cpu_count': vm_cpu_count,
+            'vm_mem_size_mb': vm_mem_size_mb,
+            'vm_disk_size_mb': vm_disk_size_mb,
+            'iso_paths': iso_paths,
+            'guest_hostname': guest_hostname,
+            'guest_ip_cidr': guest_ip_cidr,
+            'guest_gateway': guest_gateway,
+            'guest_dns_servers': guest_dns_servers,
+            'mac_address': mac_address | default(''),
+            'domain_fqdn': domain_fqdn,
+            'ssh_private_key_file': ssh_private_key_file,
+            'horizon_agent_tarball': horizon_agent_tarball,
+            'horizon_agent_install_flags': horizon_agent_install_flags | default('-A yes'),
+            'nfs_server': nfs_server,
+            'nfs_export_path': nfs_export_path,
+            'vault_local_admin_password': vault_local_admin_password,
+            'horizon_connection_server': horizon_connection_server | default(''),
+            'horizon_pool_name': horizon_pool_name | default(''),
+            'horizon_api_username': horizon_api_username | default(''),
+            'horizon_api_domain': horizon_api_domain | default(''),
+            'vault_horizon_api_password': vault_horizon_api_password | default(''),
+          } | to_nice_json }}

@@ -1,0 +1,270 @@
+---
+# Step 4 (domain-join half): the manual procedure joins the domain from inside
+# the Horizon Agent's interactive easy-setup wizard. That wizard doesn't take
+# unattended flags for the join itself, so this role does the join directly -
+# fully scriptable - same end result (a computer object in the right OU and a
+# working /etc/krb5.keytab).
+#
+# This used to go through realmd + adcli (`realm join`), which is the more
+# commonly documented route, and got as far as a working password-quoting fix
+# (see git history) before hitting something deeper: a live debugging session
+# traced a persistent, misleading "KDC reply did not match expectations"
+# failure all the way down to a real MIT krb5 client-library behavior.
+# adcli's own internal Kerberos exchange succeeds completely - confirmed with
+# KRB5_TRACE, matching a fully successful plain `kinit` for the same account
+# from the very same VM/network path - but immediately afterwards it insists
+# on reconfirming the ticket against the domain's "primary" KDC via a
+# `_kerberos-master._udp`/`_tcp` DNS SRV lookup: a legacy MIT-Kerberos-
+# specific record Windows AD does not publish by default. adcli's own
+# generated krb5.conf snippet DOES already set `master_kdc` to the right
+# value, but this particular retry path in Ubuntu 24.04's krb5 doesn't
+# consult it - only the DNS SRV lookup, which finds nothing and aborts,
+# discarding an otherwise-valid ticket. Multiple live tests (editing
+# /etc/krb5.conf, editing adcli's own generated snippet file mid-flight)
+# confirmed no config value reaches that check. `net ads join` doesn't share
+# this code path (it uses Samba's own GENSEC/GSSAPI Kerberos client, not this
+# specific get_in_tkt "verify with primary" retry), so it sidesteps the bug
+# entirely. Publishing real _kerberos-master SRV records in AD DNS would also
+# fix it and needs zero automation changes, if you'd rather do that instead
+# of relying on Samba here.
+
+- name: Install samba-common-bin (net), krb5-user, sssd-ad, sssd-tools and ldap-utils
+  ansible.builtin.apt:
+    name:
+      - samba-common-bin
+      - krb5-user
+      - sssd-ad
+      - sssd-tools
+      - packagekit
+      - ldap-utils # ldapsearch/ldapdelete - only used below to clear a stale
+                    # computer object before joining, nothing else in this
+                    # role needs it
+      - libsasl2-modules-gssapi-mit # the actual GSSAPI SASL mechanism plugin -
+                    # ldap-utils links against libsasl2, which loads this at
+                    # runtime for `ldapsearch -Y GSSAPI`; without it that fails
+                    # with a generic "SASL(-4): no mechanism available" error
+    state: present
+
+# net ads join refuses to run at all ("Host is not configured as a member
+# server") unless smb.conf already declares this host as an ADS member.
+# workgroup is the domain's short/NetBIOS name - a separate AD attribute an
+# admin can set independently of the DNS domain name, so it isn't safe to
+# derive from domain_fqdn; confirm yours (domain_netbios_name in group_vars)
+# with `net ads lookup -S <any-dc-ip>` and read the "Pre-Win2k Domain:" line.
+- name: Configure smb.conf for ADS membership
+  ansible.builtin.copy:
+    dest: /etc/samba/smb.conf
+    mode: "0644"
+    content: |
+      [global]
+         workgroup = {{ domain_netbios_name }}
+         realm = {{ domain_fqdn | upper }}
+         security = ads
+         kerberos method = secrets and keytab
+
+# createcomputer= wants the OU path top-down (domain root -> leaf), with the
+# "OU=" prefixes stripped, "/"-delimited, and the DC= components dropped
+# entirely - the reverse of computer_ou_dn's own LDAP DN order (which reads
+# leaf -> root). Deriving it here keeps computer_ou_dn the single source of
+# truth instead of needing two differently-formatted copies of the same OU
+# path kept in sync by hand. Confirmed against this exact live domain during
+# debugging: OU=HZUBTP1,OU=Computers,OU=Horizon,OU=Virtual,OU=EUC,DC=... ->
+# EUC/Virtual/Horizon/Computers/HZUBTP1.
+- name: Compute the createcomputer= OU path from computer_ou_dn
+  ansible.builtin.set_fact:
+    net_ads_createcomputer: >-
+      {{ computer_ou_dn.split(',')
+         | select('match', '^OU=')
+         | map('regex_replace', '^OU=', '')
+         | list
+         | reverse
+         | join('/') }}
+
+# ---- Stale computer-object cleanup (domain_join_delete_stale_computer_object) ----
+# A leftover computer object from an earlier build (VM deleted, but its AD
+# object never cleaned up) doesn't just get silently reused - a stale object
+# with mismatched attributes has caused confusing join failures by hand
+# before, which is exactly why every re-run so far has started with manually
+# deleting the object from the OU first. This automates that same manual
+# step: find it, delete it, then proceed to join, so every build starts from
+# a guaranteed-clean AD state.
+#
+# Kerberos/GSSAPI bind (via a scoped ticket cache), NOT LDAP simple bind.
+# This project tried simple bind first (both UPN-style "user@domain_fqdn" and
+# down-level "DOMAIN\user" bind DNs) and both failed identically on a real
+# run: "ldap_bind: Invalid credentials (49), data 52e" (ERROR_LOGON_FAILURE) -
+# for an account/password independently confirmed correct via a manual kinit
+# on the same host. Same credentials, same directory, simple bind uniformly
+# rejected regardless of DN format is the signature of LDAP channel binding
+# enforcement ("Domain controller: LDAP server channel binding token
+# requirements" = Always on the DCs) - it blocks unsigned/unbound simple
+# binds outright and returns the same generic invalid-credentials error
+# whether or not the credentials are right. GSSAPI bind isn't a "simple
+# bind" at all, so it isn't subject to that policy, and it's the exact same
+# Kerberos mechanism `net ads join -k` below already uses successfully
+# against this domain. Bonus: since no password ever touches ldapsearch's or
+# ldapdelete's own argv/stdin any more, only the kinit task below needs
+# no_log - the search/delete tasks can fail loudly with their real errors
+# directly, no redacted-report workaround needed for them.
+#
+# kinit needs the realm UPPER-cased, not whatever case domain_fqdn happens to
+# be stored in - confirmed live: `kinit user@example.com` (lowercase)
+# hit this same file's documented "KDC reply did not match expectations" bug,
+# while `kinit user@EXAMPLE.COM` (uppercase) succeeded cleanly. Same
+# reasoning as smb.conf's `realm = {{ domain_fqdn | upper }}` above.
+#
+# KRB5CCNAME points this ticket at its own scoped cache file rather than
+# whatever the default happens to be, and it's destroyed again below once
+# the search/delete are done - this is a throwaway ticket for these two
+# lookups only, not meant to linger for the rest of the build.
+#
+# Needs the join account to hold "Delete Computer Objects" permission on
+# computer_ou_dn, not just create/join rights - in AD, whoever CREATES an
+# object gets full control over that specific object by default, but only
+# over objects it created itself. If a stale object was created under a
+# different account (e.g. deleted/recreated by hand under a personal admin
+# login rather than this service account), the delete below can fail with
+# "Insufficient Access Rights" even though the same account can create
+# brand-new objects just fine - confirm/grant that permission explicitly on
+# the OU rather than assuming it's already there.
+- name: Obtain a Kerberos ticket for the LDAP search/delete below
+  ansible.builtin.command:
+    argv:
+      - kinit
+      - "{{ linux_domain_join_username.split('@')[0] }}@{{ domain_fqdn | upper }}"
+    stdin: "{{ vault_linux_domain_join_password }}"
+    stdin_add_newline: false
+  environment:
+    KRB5CCNAME: "FILE:/tmp/.stale_computer_check_krb5cc"
+  register: stale_kinit
+  changed_when: false
+  no_log: true # the only task in this block that ever touches the password
+  when: domain_join_delete_stale_computer_object | default(true)
+  failed_when: false # don't fail here - let the redacted report task below decide,
+                      # same reasoning as "Join the domain" further down
+
+- name: Report Kerberos ticket acquisition failure (password redacted)
+  ansible.builtin.fail:
+    msg: >-
+      kinit for the LDAP stale-object check failed, rc={{ stale_kinit.rc }}.
+      stdout: {{ stale_kinit.stdout | default('') | regex_replace(vault_linux_domain_join_password | regex_escape, '***REDACTED***') }}
+      stderr: {{ stale_kinit.stderr | default('') | regex_replace(vault_linux_domain_join_password | regex_escape, '***REDACTED***') }}
+  when:
+    - domain_join_delete_stale_computer_object | default(true)
+    - stale_kinit is defined and stale_kinit.rc is defined and stale_kinit.rc != 0
+
+- name: Search for an existing computer object for this hostname
+  # No -x/-D/-y here - GSSAPI bind takes no password on the command line at
+  # all, so unlike the old simple-bind version this task has nothing to hide
+  # and can just fail normally with its own real error text.
+  #
+  # -o ldif-wrap=no: without this, ldapsearch's LDIF output folds any line
+  # over ~76 columns onto a continuation line (a single leading space, per
+  # RFC 2849) - confirmed live: this domain's real OU depth ("CN=<host>,
+  # OU=HZUBTP1,OU=Computers,OU=Horizon,OU=Virtual,OU=EUC,DC=ad,DC=admin,
+  # DC=example,DC=com") is long enough to wrap, silently truncating the dn:
+  # value the delete task below extracts to just its first physical line
+  # ("...OU=EUC,DC=ad", missing everything after) - ldapdelete then fails on
+  # that truncated DN with an LDAP referral, not an obviously-DN-related
+  # error. This flag disables wrapping outright rather than teaching the
+  # extraction below to reassemble folded continuation lines.
+  ansible.builtin.command:
+    argv:
+      - ldapsearch
+      - -H
+      - "ldap://{{ domain_fqdn }}"
+      - -Y
+      - GSSAPI
+      - -o
+      - ldif-wrap=no
+      - -b
+      - "{{ computer_ou_dn }}"
+      - -s
+      - sub
+      - "(&(objectClass=computer)(cn={{ guest_hostname }}))"
+      - dn
+  environment:
+    KRB5CCNAME: "FILE:/tmp/.stale_computer_check_krb5cc"
+  register: stale_computer_search
+  changed_when: false
+  when: domain_join_delete_stale_computer_object | default(true)
+
+- name: Delete the stale computer object, if one was found
+  ansible.builtin.command:
+    argv:
+      - ldapdelete
+      - -H
+      - "ldap://{{ domain_fqdn }}"
+      - -Y
+      - GSSAPI
+      - "{{ stale_computer_search.stdout_lines | select('match', '^dn: ') | first | regex_replace('^dn: ', '') }}"
+  environment:
+    KRB5CCNAME: "FILE:/tmp/.stale_computer_check_krb5cc"
+  when:
+    - domain_join_delete_stale_computer_object | default(true)
+    - stale_computer_search is defined and stale_computer_search.stdout is defined
+    - "stale_computer_search.stdout is search('^dn: ', multiline=True)"
+
+- name: Destroy the temporary Kerberos ticket used for the LDAP search/delete above
+  ansible.builtin.command:
+    argv:
+      - kdestroy
+  environment:
+    KRB5CCNAME: "FILE:/tmp/.stale_computer_check_krb5cc"
+  changed_when: false
+  failed_when: false # cleanup only - nothing downstream depends on this succeeding
+  when: domain_join_delete_stale_computer_object | default(true)
+
+- name: Check whether this host is already joined to the domain
+  ansible.builtin.command: net ads testjoin -k
+  register: net_testjoin
+  changed_when: false
+  failed_when: false
+
+- name: Join the domain
+  # -k forces Kerberos - net ads join defaults to it anyway once smb.conf has
+  # security = ads, but this is the exact invocation confirmed working live
+  # against this domain, so it stays explicit even though newer net versions
+  # flag it as deprecated (a harmless warning, not an error). Not pinning a
+  # specific -S <dc> here (the live debugging session did, to keep each test
+  # reproducible against one known-good DC) - normal site-aware DNS-based DC
+  # discovery already proved reliable throughout that same debugging session,
+  # so it's left to auto-discover rather than hardcoding one DC's IP into the
+  # automation; if a real run ever fails specifically at this step, pinning
+  # -S is the first thing worth trying.
+  # --no-dns-updates skips net's own attempt to dynamically register this
+  # hostname in DNS, which this platform already handles separately (see the
+  # platform post's "reserve the IP and create a matching DNS A record first"
+  # step).
+  # Password goes in via PASSWD_FD (an open file descriptor number, per net's
+  # own manpage) pointed at fd 0, fed by Ansible's own `stdin` parameter -
+  # same reasoning as this project's other Kerberos password handling: never
+  # let a real password touch shell quoting.
+  ansible.builtin.command:
+    argv:
+      - net
+      - ads
+      - join
+      - -k
+      - --no-dns-updates
+      - -U
+      - "{{ linux_domain_join_username.split('@')[0] }}"
+      - "createcomputer={{ net_ads_createcomputer }}"
+    stdin: "{{ vault_linux_domain_join_password }}"
+    stdin_add_newline: false
+  environment:
+    PASSWD_FD: "0"
+  register: net_join_result
+  when: net_testjoin.rc != 0
+  no_log: true # the join command/output can echo the password
+  failed_when: false # don't fail here - let the redacted report task below decide,
+                      # so a real failure surfaces actual diagnostic text instead of
+                      # Ansible's generic "output has been hidden" message
+
+- name: Report domain join failure (password redacted)
+  ansible.builtin.fail:
+    msg: >-
+      net ads join failed, rc={{ net_join_result.rc }}.
+      stdout: {{ net_join_result.stdout | default('') | regex_replace(vault_linux_domain_join_password | regex_escape, '***REDACTED***') }}
+      stderr: {{ net_join_result.stderr | default('') | regex_replace(vault_linux_domain_join_password | regex_escape, '***REDACTED***') }}
+  when: net_join_result is defined and net_join_result.rc is defined and net_join_result.rc != 0

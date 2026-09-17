@@ -1,0 +1,23 @@
+---
+# Step 9: an instant-clone template must not update itself between snapshots -
+# updates are applied by rebuilding and re-snapshotting through this same
+# pipeline, not by the running clones.
+- name: Disable and stop unattended-upgrades
+  ansible.builtin.systemd:
+    name: unattended-upgrades
+    state: stopped
+    enabled: false
+
+- name: Remove the unattended-upgrades package
+  ansible.builtin.apt:
+    name: unattended-upgrades
+    state: absent
+    autoremove: true
+
+- name: Disable apt's daily update/upgrade timers
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: false
+  loop:
+    - apt-daily.timer
+    - apt-daily-upgrade.timer

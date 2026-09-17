@@ -1,0 +1,10 @@
+---
+# Step 11: grant sudo to the pool's AD group via a validated sudoers.d
+# drop-in, rather than editing /etc/sudoers directly - a bad edit here
+# with visudo would block itself; a bad drop-in file just gets ignored.
+- name: Grant the pool group sudo access
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/{{ linux_login_group | lower }}"
+    content: "%{{ linux_login_group | lower }} ALL=(ALL:ALL) ALL\n"
+    mode: "0440"
+    validate: "visudo -cf %s"

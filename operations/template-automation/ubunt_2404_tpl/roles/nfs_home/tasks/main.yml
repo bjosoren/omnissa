@@ -1,0 +1,29 @@
+---
+# Step 6: NFS-mounted home directories via pam_mount, matching the NFS home
+# server set up separately (see the platform post's prerequisites).
+- name: Install NFS client and pam_mount
+  ansible.builtin.apt:
+    name:
+      - nfs-common
+      - libpam-mount
+    state: present
+
+- name: Enable automatic home directory creation on first login
+  ansible.builtin.command: pam-auth-update --enable mkhomedir
+  register: pam_mkhomedir
+  changed_when: "'already' not in pam_mkhomedir.stdout"
+
+- name: Check whether the NFS volume entry already exists in pam_mount.conf.xml
+  ansible.builtin.command: grep -q 'server="{{ nfs_server }}"' /etc/security/pam_mount.conf.xml
+  register: pam_mount_present
+  changed_when: false
+  failed_when: false
+
+- name: Add the NFS home volume to pam_mount.conf.xml
+  ansible.builtin.replace:
+    path: /etc/security/pam_mount.conf.xml
+    regexp: '(</pam_mount>)'
+    replace: >-
+      <volume fstype="nfs" server="{{ nfs_server }}" path="{{ nfs_export_path }}"
+      mountpoint="/home" options="rw,sync" />\n\1
+  when: pam_mount_present.rc != 0
