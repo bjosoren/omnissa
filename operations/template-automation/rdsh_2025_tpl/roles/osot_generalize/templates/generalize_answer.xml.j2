@@ -105,6 +105,27 @@
       GUI-generated file has this in the wrong pass, silently a no-op there
       rather than an error. Kept in specialize, where it already was and
       where it actually works.
+
+  ADDED 2026-09-18: `net accounts /lockoutthreshold:0` in the specialize
+  RunSynchronous block below - this build failed with "ntlm: the specified
+  credentials were rejected by the server" on the very first task after
+  reconnecting post-Sysprep (store_apps_cleanup), right after
+  wait_for_connection had already succeeded once and
+  osot_generalize/tasks/main.yml's own reset_connection had run cleanly -
+  the same symptom this project already root-caused once before, on this
+  same account, during the FIRST boot's audit-mode entry (see
+  floppy/autounattend.pkrtpl.hcl's own Order 4 comment in its specialize
+  pass for the full investigation: net use over SMB proved the account was
+  genuinely locked out, not misconfigured, and WinRM/WS-Man itself never
+  surfaces lockout distinctly from a wrong password - both report the same
+  generic "credentials rejected"). That file's specialize pass disables
+  lockout entirely (`net accounts /lockoutthreshold:0`) specifically so it
+  protects every WinRM reconnection for the rest of the build, but this
+  file's own specialize RunSynchronous block never carried the same command
+  - Sysprep's specialize pass here re-specializes the machine independently
+  of whatever the first boot's answer file already set, so nothing here
+  reapplied it. Added as Order 3, before AutoLogon/WinRM bootstrap in the
+  oobeSystem pass below ever run, same placement reasoning as the original.
 -->
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
 
@@ -137,6 +158,15 @@
         <RunSynchronousCommand wcm:action="add">
           <Order>2</Order>
           <Path>net user Administrator /active:yes</Path>
+        </RunSynchronousCommand>
+        <!-- See this file's own header, "ADDED 2026-09-18" - same fix
+             floppy/autounattend.pkrtpl.hcl's specialize pass already proved
+             for this exact account/symptom on first boot, reapplied here
+             since Sysprep's own specialize pass doesn't carry it forward on
+             its own. -->
+        <RunSynchronousCommand wcm:action="add">
+          <Order>3</Order>
+          <Path>net accounts /lockoutthreshold:0</Path>
         </RunSynchronousCommand>
       </RunSynchronous>
     </component>
@@ -208,12 +238,12 @@
 
       <FirstLogonCommands>
 
-        <!-- ── WinRM bootstrap only - trimmed from autounattend.pkrtpl.hcl's
+        <!-- â”€â”€ WinRM bootstrap only - trimmed from autounattend.pkrtpl.hcl's
              oobeSystem pass (see this file's header comment for why
              BitLocker-prevention and VMware Tools aren't repeated here).
              Network location resetting to Public after Sysprep - which
              re-blocks WinRM behind Windows Firewall's Public profile - is
-             the well-known gotcha this specifically guards against. ───── -->
+             the well-known gotcha this specifically guards against. â”€â”€â”€â”€â”€ -->
         <SynchronousCommand wcm:action="add">
           <Order>1</Order>
           <!-- ADDED 2026-09-14, same "must change password at next logon"
@@ -285,10 +315,10 @@
           <RequiresUserInput>false</RequiresUserInput>
         </SynchronousCommand>
 
-        <!-- ── OSOT-sourced golden-image housekeeping, appended 2026-09-15 -
+        <!-- â”€â”€ OSOT-sourced golden-image housekeeping, appended 2026-09-15 -
              see this file's own header for where these came from and why
              they're renumbered 10-20 in OSOT's own real intended execution
-             order rather than its generated document order. ───── -->
+             order rather than its generated document order. â”€â”€â”€â”€â”€ -->
         <SynchronousCommand wcm:action="add">
           <Order>10</Order>
           <Description>Disable RetailDemo CleanupOfflineContent scheduled task (OSOT-sourced)</Description>
