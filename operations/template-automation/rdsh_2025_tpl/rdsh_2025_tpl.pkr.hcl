@@ -213,103 +213,135 @@ build {
     playbook_file = "${path.root}/playbook.yml"
     user          = var.build_username
     use_proxy     = false
-    extra_arguments = [
-      # Same three-file convention as ubt_2404_tpl.pkr.hcl: shared platform
-      # vars, shared vault, this image's own non-secret vars - nothing
-      # image-specific redeclared here.
-      "-e", "@${var.inventory_dir}/group_vars/all.yml",
-      "-e", "@${var.inventory_dir}/group_vars/all/vault.yml",
-      "-e", "@${var.inventory_dir}/group_vars/rdsh_2025_tpl.yml",
-      "--vault-password-file", "~/.vault_pass",
-      # WinRM connection details for the ansible provisioner's own generated
-      # inventory - ansible_password isn't picked up from the WinRM
-      # communicator settings above automatically, it has to be forwarded
-      # explicitly, same "nothing crosses from Packer to Ansible on its own"
-      # lesson ubt_2404_tpl's ansible_become_password comment already
-      # documents for the Linux side.
-      "-e", "ansible_password=${var.build_password}",
-      "-e", "ansible_winrm_server_cert_validation=ignore",
-      # NTLM transport, not pywinrm's Basic-auth default - CHANGED 2026-09-14
-      # per the Omnissa Community "Horizon Gold Image creation with Ansible"
-      # guide's own vars/rdsh_image.yml (winrm_transport: "ntlm"), tried as a
-      # fix for this build's ongoing WinRM instability. The guide's own
-      # stated reason: Windows Update's API needs the token NTLM negotiation
-      # provides, Basic auth doesn't carry it - and separately, Basic auth's
-      # failure modes are exactly the kind of generic, undifferentiated
-      # "Access is denied" this pipeline has been chasing all session
-      # (lockout, bad password, and must-change-password all surfaced
-      # identically under Basic - see floppy/autounattend.pkrtpl.hcl's
-      # lockoutthreshold comment). Requires the requests_ntlm Python package
-      # in the control node's ansible-venv (pip install requests_ntlm) -
-      # pywinrm itself is already a prerequisite for the Basic path this
-      # replaces, so only requests_ntlm is new. WinRM's service side now
-      # enables BOTH Basic and Negotiate (see floppy/autounattend.pkrtpl.hcl's
-      # own auditSystem/auditUser passes - this content used to live in
-      # roles/enter_audit_mode/templates/audit_answer.xml.j2, now deleted,
-      # its proven WinRM-bootstrap sequence moved verbatim into that file
-      # instead - and roles/osot_generalize/templates/generalize_answer.xml.j2 -
-      # both updated together) so this is additive, not a replacement - if NTLM
-      # doesn't pan out, dropping this one line reverts to Basic without
-      # touching the Windows-side config at all.
-      "-e", "ansible_winrm_transport=ntlm",
-      # Scoped here, NOT in group_vars/all.yml: this build's WinRM plays need
-      # cmd (Ansible's win_* action plugins build their command lines for cmd
-      # and this project's default connection is winrm), but group_vars/all.yml
-      # is shared with the connection: local utility plays (resolve_vars.yml,
-      # preflight_check_vm.yml, etc.) elsewhere in this repo, where forcing
-      # ansible_shell_type=cmd breaks the local shell instead. Setting it only
-      # as a provisioner -e here means it only ever applies to this playbook's
-      # own WinRM run. Without this, Ansible warns "The winrm connection
-      # plugin should have the shell type of cmd and not powershell" and
-      # win_* tasks fail confusingly (WSMan OperationTimeout, "resource is in
-      # use", garbled command dumps) - confirmed by an actual build failure
-      # dying on the very first task (Gathering Facts) with exactly this
-      # warning immediately above the error.
-      "-e", "ansible_shell_type=cmd",
-      # ADDED 2026-09-15 after a real build died mid-playbook with
-      # "[ERROR]: Task failed: Bad HTTP response returned from server.
-      # Code 400" - not an OSOT-specific error at all, a genuine WinRM
-      # transport failure, thrown from
-      # roles/osot_optimize/tasks/main.yml's own "Wait for OSOT Optimize
-      # pass to finish" polling task after only ~21 retries (~5 minutes),
-      # while an earlier file-gate pause task in that SAME build (roles/
-      # enter_audit_mode, same short-WinRM-call-in-a-loop pattern) had
-      # already run 222 retries (~55 minutes) without incident - so this
-      # wasn't "polling eventually breaks WinRM," it was specific to
-      # whatever that particular task's WinRM traffic was doing.
-      #
-      # Root cause candidate, from Ansible's own WinRM docs
-      # (docs.ansible.com/projects/ansible/latest/os_guide/windows_winrm.html):
-      # "HTTP can be used when the authentication option is NTLM, Kerberos
-      # or CredSSP. These protocols will encrypt the WinRM payload with
-      # their own encryption method before sending it to the server" -
-      # i.e. with winrm_use_ssl=false/winrm_insecure=true above (Packer's
-      # own deliberate choice, unrelated to this) and ntlm transport
-      # (added 2026-09-14, see that var's own comment), every single WinRM
-      # request this whole playbook sends is being wrapped in NTLM's own
-      # message-level encryption automatically - "message-level encryption
-      # is not used when running over HTTPS" (same doc), confirming this
-      # only applies because this build deliberately isn't using HTTPS.
-      # A real, still-open ansible-project forum thread
-      # (forum.ansible.com/t/kerberos-bad-http-response-returned-from-server-code-400/26869)
-      # documents the IDENTICAL error text, root-caused there to that same
-      # message-encryption layer failing and producing a malformed
-      # request, for the Kerberos case specifically - fixed by setting
-      # ansible_winrm_message_encryption=never (or moving to HTTPS, port
-      # 5986, not used here). That thread is Kerberos, not NTLM - this is
-      # inference by analogy to NTLM's own equivalent encryption wrapping,
-      # not a confirmed identical bug report for NTLM, so treat this as
-      # the best-evidenced candidate worth testing next, not a confirmed
-      # fix yet.
-      #
-      # Disabling message encryption here does NOT newly expose anything -
-      # winrm_insecure=true above already means Packer's own WinRM
-      # communicator traffic is unencrypted plain HTTP on this same
-      # isolated build subnet; this just stops Ansible's own separate
-      # WinRM connection from adding (and apparently sometimes corrupting)
-      # an extra encryption layer on top of a transport that was already
-      # deliberately left unencrypted.
-      "-e", "ansible_winrm_message_encryption=never",
-    ]
+    extra_arguments = concat(
+      [
+        # Same three-file convention as ubt_2404_tpl.pkr.hcl: shared platform
+        # vars, shared vault, this image's own non-secret vars - nothing
+        # image-specific redeclared here.
+        "-e", "@${var.inventory_dir}/group_vars/all.yml",
+        "-e", "@${var.inventory_dir}/group_vars/all/vault.yml",
+        "-e", "@${var.inventory_dir}/group_vars/rdsh_2025_tpl.yml",
+        # ADDED 2026-09-18: Horizon Agent/DEM/App Volumes settings and OSOT
+        # settings were split out of rdsh_2025_tpl.yml into their own
+        # committed files (see rdsh_2025_tpl.yml's own header comment for
+        # the full rationale). scripts/build.sh's GROUP_VARS_ARGS already
+        # picked these two files up for the resolve-vars/preflight plays,
+        # but THIS provisioner builds its own, separate extra_arguments list
+        # for the actual in-guest playbook.yml run - it still only had the
+        # three files above, so these two were missing here even though the
+        # split itself was otherwise correct. That's what made a real build
+        # fail on osot_optimize's very first task ("'osot_installer' is
+        # undefined") even though the resolve-vars/preflight plays earlier
+        # in that same run had already succeeded.
+        "-e", "@${var.inventory_dir}/group_vars/rdsh_2025_tpl_agents.yml",
+        "-e", "@${var.inventory_dir}/group_vars/rdsh_2025_tpl_osot.yml",
+      ],
+      # rdsh_2025_tpl.local.yml is this control node's real, site-specific
+      # override file (gitignored, never committed - see that file's own
+      # .example template for the full list of keys it can override).
+      # Included last, and only if it actually exists, so its values win
+      # over the three committed files above - same "only override what's
+      # present, local wins last" behavior scripts/build.sh's own
+      # LOCAL_VARS_FILE check already has. Without this, a real build would
+      # get past the "undefined" failure the two lines above fix, but would
+      # still run against the committed CHANGEME-* placeholder values
+      # (installer paths that don't exist on the NFS share, a fake vCenter
+      # folder, etc.) instead of this control node's real ones.
+      fileexists("${var.inventory_dir}/group_vars/rdsh_2025_tpl.local.yml") ? [
+        "-e", "@${var.inventory_dir}/group_vars/rdsh_2025_tpl.local.yml",
+      ] : [],
+      [
+        "--vault-password-file", "~/.vault_pass",
+        # WinRM connection details for the ansible provisioner's own generated
+        # inventory - ansible_password isn't picked up from the WinRM
+        # communicator settings above automatically, it has to be forwarded
+        # explicitly, same "nothing crosses from Packer to Ansible on its own"
+        # lesson ubt_2404_tpl's ansible_become_password comment already
+        # documents for the Linux side.
+        "-e", "ansible_password=${var.build_password}",
+        "-e", "ansible_winrm_server_cert_validation=ignore",
+        # NTLM transport, not pywinrm's Basic-auth default - CHANGED 2026-09-14
+        # per the Omnissa Community "Horizon Gold Image creation with Ansible"
+        # guide's own vars/rdsh_image.yml (winrm_transport: "ntlm"), tried as a
+        # fix for this build's ongoing WinRM instability. The guide's own
+        # stated reason: Windows Update's API needs the token NTLM negotiation
+        # provides, Basic auth doesn't carry it - and separately, Basic auth's
+        # failure modes are exactly the kind of generic, undifferentiated
+        # "Access is denied" this pipeline has been chasing all session
+        # (lockout, bad password, and must-change-password all surfaced
+        # identically under Basic - see floppy/autounattend.pkrtpl.hcl's
+        # lockoutthreshold comment). Requires the requests_ntlm Python package
+        # in the control node's ansible-venv (pip install requests_ntlm) -
+        # pywinrm itself is already a prerequisite for the Basic path this
+        # replaces, so only requests_ntlm is new. WinRM's service side now
+        # enables BOTH Basic and Negotiate (see floppy/autounattend.pkrtpl.hcl's
+        # own auditSystem/auditUser passes - this content used to live in
+        # roles/enter_audit_mode/templates/audit_answer.xml.j2, now deleted,
+        # its proven WinRM-bootstrap sequence moved verbatim into that file
+        # instead - and roles/osot_generalize/templates/generalize_answer.xml.j2 -
+        # both updated together) so this is additive, not a replacement - if NTLM
+        # doesn't pan out, dropping this one line reverts to Basic without
+        # touching the Windows-side config at all.
+        "-e", "ansible_winrm_transport=ntlm",
+        # Scoped here, NOT in group_vars/all.yml: this build's WinRM plays need
+        # cmd (Ansible's win_* action plugins build their command lines for cmd
+        # and this project's default connection is winrm), but group_vars/all.yml
+        # is shared with the connection: local utility plays (resolve_vars.yml,
+        # preflight_check_vm.yml, etc.) elsewhere in this repo, where forcing
+        # ansible_shell_type=cmd breaks the local shell instead. Setting it only
+        # as a provisioner -e here means it only ever applies to this playbook's
+        # own WinRM run. Without this, Ansible warns "The winrm connection
+        # plugin should have the shell type of cmd and not powershell" and
+        # win_* tasks fail confusingly (WSMan OperationTimeout, "resource is in
+        # use", garbled command dumps) - confirmed by an actual build failure
+        # dying on the very first task (Gathering Facts) with exactly this
+        # warning immediately above the error.
+        "-e", "ansible_shell_type=cmd",
+        # ADDED 2026-09-15 after a real build died mid-playbook with
+        # "[ERROR]: Task failed: Bad HTTP response returned from server.
+        # Code 400" - not an OSOT-specific error at all, a genuine WinRM
+        # transport failure, thrown from
+        # roles/osot_optimize/tasks/main.yml's own "Wait for OSOT Optimize
+        # pass to finish" polling task after only ~21 retries (~5 minutes),
+        # while an earlier file-gate pause task in that SAME build (roles/
+        # enter_audit_mode, same short-WinRM-call-in-a-loop pattern) had
+        # already run 222 retries (~55 minutes) without incident - so this
+        # wasn't "polling eventually breaks WinRM," it was specific to
+        # whatever that particular task's WinRM traffic was doing.
+        #
+        # Root cause candidate, from Ansible's own WinRM docs
+        # (docs.ansible.com/projects/ansible/latest/os_guide/windows_winrm.html):
+        # "HTTP can be used when the authentication option is NTLM, Kerberos
+        # or CredSSP. These protocols will encrypt the WinRM payload with
+        # their own encryption method before sending it to the server" -
+        # i.e. with winrm_use_ssl=false/winrm_insecure=true above (Packer's
+        # own deliberate choice, unrelated to this) and ntlm transport
+        # (added 2026-09-14, see that var's own comment), every single WinRM
+        # request this whole playbook sends is being wrapped in NTLM's own
+        # message-level encryption automatically - "message-level encryption
+        # is not used when running over HTTPS" (same doc), confirming this
+        # only applies because this build deliberately isn't using HTTPS.
+        # A real, still-open ansible-project forum thread
+        # (forum.ansible.com/t/kerberos-bad-http-response-returned-from-server-code-400/26869)
+        # documents the IDENTICAL error text, root-caused there to that same
+        # message-encryption layer failing and producing a malformed
+        # request, for the Kerberos case specifically - fixed by setting
+        # ansible_winrm_message_encryption=never (or moving to HTTPS, port
+        # 5986, not used here). That thread is Kerberos, not NTLM - this is
+        # inference by analogy to NTLM's own equivalent encryption wrapping,
+        # not a confirmed identical bug report for NTLM, so treat this as
+        # the best-evidenced candidate worth testing next, not a confirmed
+        # fix yet.
+        #
+        # Disabling message encryption here does NOT newly expose anything -
+        # winrm_insecure=true above already means Packer's own WinRM
+        # communicator traffic is unencrypted plain HTTP on this same
+        # isolated build subnet; this just stops Ansible's own separate
+        # WinRM connection from adding (and apparently sometimes corrupting)
+        # an extra encryption layer on top of a transport that was already
+        # deliberately left unencrypted.
+        "-e", "ansible_winrm_message_encryption=never",
+      ]
+    )
   }
 }
