@@ -4,6 +4,25 @@
 # group_vars file" convention. Nothing here is secret; vault_win_admin_password
 # and vault_horizon_api_password stay in inventory/group_vars/all/vault.yml.
 #
+# RESTRUCTURED 2026-09-18, per the user's explicit request: Horizon Agent /
+# DEM / App Volumes / OSOT settings moved out to their own committed files,
+# so this file stays focused on VM-shape/build and site-specific placement
+# settings:
+#   - rdsh_2025_tpl_agents.yml - Horizon Agent / DEM / App Volumes feature
+#                                toggles, installer-path placeholders, and
+#                                Horizon farm/pool publish settings
+#                                (committed, non-secret)
+#   - rdsh_2025_tpl_osot.yml   - OS Optimization Tool job selection +
+#                                installer-path placeholders (committed,
+#                                non-secret)
+#   - rdsh_2025_tpl.local.yml  - real, site-specific values for every
+#                                CHANGEME-* placeholder across all three
+#                                committed files above (gitignored, never
+#                                committed - see rdsh_2025_tpl.local.yml.example)
+# scripts/build.sh and scripts/publish_to_pool.sh load all of these
+# automatically (see either script's own "Local, untracked overrides"
+# comment) - nothing else to wire up.
+#
 # You need ONE new vault entry for this image that ubt_2404_tpl doesn't have:
 #   ansible-vault edit inventory/group_vars/all/vault.yml
 #   # add: vault_win_admin_password: "<strong password>"
@@ -13,17 +32,14 @@
 # vault_local_admin_password becomes.
 
 # ---- Placement ----
-# PLACEHOLDER VALUES ONLY, on purpose - this repo is public. Extended
-# 2026-09-17, per the user's explicit request, to cover every site-specific
-# value in this file the same way the "Guest network" section below already
-# handled guest_ip_cidr/guest_gateway/guest_dns_servers - not just network
-# fields. Real values belong in rdsh_2025_tpl.local.yml on each control
-# node; see the "Guest network" section below for the full mechanism, and
+# PLACEHOLDER VALUES ONLY, on purpose - this repo is public. Real values
+# belong in rdsh_2025_tpl.local.yml on each control node; see the "Guest
+# network" section below for the full mechanism, and
 # rdsh_2025_tpl.local.yml.example (same directory) for every overridable
 # key documented in one place.
 vcenter_cluster: "CHANGEME-cluster"         # <- placeholder - real value goes in rdsh_2025_tpl.local.yml
 vcenter_datastore: "CHANGEME-datastore"     # <- placeholder - real value goes in rdsh_2025_tpl.local.yml
-vcenter_folder: "CHANGEME-folder"           # <- placeholder - real value goes in rdsh_2025_tpl.local.yml
+vcenter_folder: "CHANGEME-folder"           # <- placeholder - real value goes in rdsh_2025_tpl.local.yml (can be a nested path, e.g. "EUC/Desktops/HZ-Templates")
 vcenter_network: "CHANGEME-portgroup"       # <- placeholder - real value goes in rdsh_2025_tpl.local.yml
 
 # ---- Sizing ----
@@ -151,177 +167,11 @@ enable_windows_update: true
 # (or pass -e osot_generalize_manual_pause=true) to re-enable it.
 osot_generalize_manual_pause: false
 
-# ---- Horizon Agent (RDSH mode) ----
-# ADDLOCAL feature toggles - playbook.yml's horizon_agent role builds the
-# ADDLOCAL string from these. Defaults below mirror the source guide's own
-# RDSH-tuned choices (NGVC on for instant-clone RDSH, PrintRedir/PSG on as
-# RDSH-relevant, RDP/RDSH3D off unless you have vGPU-backed 3D RDSH).
-horizon_agent_installer: "/mnt/wdnfs/Ansible/horizon/CHANGEME-horizon-agent-installer.exe"   # <- placeholder - real value (on your NFS share's horizon/ folder) goes in rdsh_2025_tpl.local.yml
-horizon_vc_managed: true
-horizon_core: true
-horizon_blast: true
-horizon_usb: true
-horizon_ngvc: true              # required for instant-clone RDSH
-horizon_rtav: true
-horizon_cdr: true
-horizon_serial_port: false
-horizon_scanner: false
-horizon_geolocation: false
-horizon_smartcard: true
-horizon_audio: true
-horizon_mmr: true
-horizon_rdp: false
-horizon_rdsh3d: false           # enable with vGPU for 3D RDSH
-horizon_sdo_sensor: false
-horizon_perf_tracker: true
-horizon_help_desk: true
-horizon_print_redir: false       # important for RDSH - session-scoped printer redirection
-horizon_psg: true
-horizon_url_filtering: false
-
-# ---- DEM Agent ----
-dem_agent_installer: "/mnt/wdnfs/Ansible/dem/CHANGEME-dem-agent-installer.msi"   # <- placeholder - real value (on your NFS share's dem/ folder) goes in rdsh_2025_tpl.local.yml
-dem_flex_engine: true
-dem_flex_migrate: false
-dem_self_support: true
-dem_mgmt_console: false
-dem_integration_enabled: false
-dem_noad_config: ""
-dem_comp_env_config: ""
-
-# ---- App Volumes Agent ----
-appvolumes_agent_installer: "/mnt/wdnfs/Ansible/appvolumes/CHANGEME-appvolumes-agent-installer.msi"   # <- placeholder - real value (on your NFS share's appvolumes/ folder) goes in rdsh_2025_tpl.local.yml
-appvolumes_manager: "appvol.example.com"   # already safe - generic placeholder hostname
-appvolumes_port: 443
-appvolumes_ssl_validation: 1
-
-# ---- OS Optimization Tool (OSOT) ----
-# Added 2026-09-11 per the user's explicit request to restructure this
-# pipeline around Omnissa's own "Using Automation to Create Optimized
-# Windows Images for Horizon VMs" / "Manually creating optimized Windows
-# images for Horizon VMs" guides - see roles/osot_optimize, osot_generalize,
-# osot_finalize, and playbook.yml's own rewritten header comment (OSOT used
-# to be flagged there as "a known, previously-unresolved blocker on this
-# exact platform" - driving it via its documented CLI instead of the GUI
-# that actually hung under WinRM is what resolves that, not a blind retry).
-#
-# osot_installer: PLACEHOLDER - point this at wherever you stage the OSOT
-# executable on your NFS share, same convention as horizon_agent_installer/
-# dem_agent_installer/appvolumes_agent_installer above (an absolute path on
-# the control node's NFS mount). CONFIRMED 2026-09-11 from a real build's
-# error output (osot_optimize's win_copy failing to find the old placeholder
-# on the control node) plus a directory listing of the NFS share's osot/
-# folder - /export/ansible/Ansible/osot/ is the NFS export path shown by
-# that share browser, not the control node's own mount path; following the
-# same /mnt/wdnfs/Ansible/<component>/<file> convention every other
-# installer var above already uses for that same share.
-osot_installer: "/mnt/wdnfs/Ansible/osot/CHANGEME-osot-installer.exe"   # <- placeholder - real value goes in rdsh_2025_tpl.local.yml
-
-# osot_template: NOT currently passed to -t (see roles/osot_optimize's own
-# header) - a real build failed to load exactly this string
-# ("File not found: Omnissa\Windows 10, 11 and Server 2022, 2025.xml"),
-# even though it's the one entry shown in the OSOT GUI's Optimize tab
-# template dropdown (confirmed 2026-09-10 on an existing reference VM,
-# CS-SRV-01, where OSOT had already been run before - this build VM runs
-# OSOT for the first time, and whatever populates that named template file
-# on disk may not have happened yet there). osot_optimize now omits -t and
-# relies on the documented default-template fallback instead. Left defined
-# here, unused, in case -t needs revisiting once you've confirmed what
-# OSOT's own template repository actually looks like on a freshly-imaged
-# build VM (vs. this pre-existing reference one).
-osot_template: "Omnissa\\Windows 10, 11 and Server 2022, 2025"
-
-# osot_finalize_job_numbers / osot_finalize_cleanup_job_numbers: originally
-# ONE variable ("0 1 2 3 4 5 6 7 10 11"), set 2026-09-11 per the user's
-# explicit choice to run every Finalize job except 8 and 9. SPLIT INTO TWO
-# 2026-09-16, per the user's explicit request to run OSOT Finalize as two
-# separate passes at two different points in the pipeline - see
-# roles/osot_finalize_cleanup's own header for the full rationale (job 7's
-# SDelete64.exe can run long, so App Volumes now waits for it to genuinely
-# finish before installing) and roles/osot_finalize's own header for why job
-# 9 changed. Job 8 stays excluded from both, unchanged:
-#   8 "Creates local group policies" (needs LGPO.exe) - not wanted, skipped
-#     on purpose, not staged.
-#
-# FIRST pass (roles/osot_finalize_cleanup): the disk/profile/log
-# housekeeping jobs. Originally ran BEFORE appvolumes so App Volumes
-# wouldn't start until job 7 (SDelete64.exe) genuinely finished - MOVED
-# 2026-09-17, per the user's explicit request, to run AFTER appvolumes
-# instead (see roles/osot_finalize_cleanup's own header for the full
-# before/after reasoning). Still runs before the second pass below.
-osot_finalize_cleanup_job_numbers: "0 1 2 3 4 5 6 7"
-
-# SECOND pass (roles/osot_finalize, right before hardening/cleanup/
-# shutdown): the network/licensing-identity reset jobs. Runs after both
-# appvolumes and osot_finalize_cleanup, unaffected by the 2026-09-17
-# reorder above.
-# Job 9 "Clears KMS Settings" is NOW INCLUDED - FLAGGED, not a silent
-# change: the original 2026-09-11 comment on this variable excluded job 9
-# because "this image uses win_kms_key's GVLK... clearing KMS settings here
-# isn't something the user wants done at Finalize time" (still true - see
-# variables.pkr.hcl). The user's 2026-09-16 request explicitly listed
-# "9,10 and 11" for this pass, which reverses that - implemented as asked;
-# see roles/osot_finalize's own header for the full flag/confirmation note.
-#
-# Job 11 "Release IP Address" - REMOVED 2026-09-16, same day it was added,
-# after a real build (still running the pre-split single-pass version, but
-# with the same "0 1 2 3 4 5 6 7 10 11" list) failed exactly where job 11
-# would have run, with a WinRM ConnectTimeoutError to the guest ("Max
-# retries exceeded... Connection to <ip> timed out (connect timeout=30)").
-# Cross-checked against Omnissa's own docs.omnissa.com Finalize command-line
-# reference: job 11 is literally "Releases IP Address" - no further detail
-# on mechanism, but the failure signature (a fresh TCP connect timing out,
-# not an existing connection resetting) matches the guest's IP actually
-# changing/dropping mid-command. Confirmed with the user this is a real
-# risk beyond just this one Ansible task: rdsh_2025_tpl.pkr.hcl's own
-# communicator = "winrm" means Packer's shutdown_command rides the same
-# channel, so losing the IP here could just as easily break Packer's own
-# graceful shutdown afterward. User's explicit choice, given that risk:
-# drop job 11 from the automated pipeline entirely rather than risk another
-# failed build cycle chasing a Packer/WinRM interaction that isn't
-# documented anywhere. If you want the "release IP before capture" hygiene
-# back later, it needs its own dedicated, carefully-observed test run - not
-# bundled in here.
-osot_finalize_job_numbers: "9 10"
-
-# osot_finalize_sdelete64_installer: CONFIRMED 2026-09-11 from the same NFS
-# directory listing that confirmed osot_installer above - sdelete64.exe
-# (NOT sdelete.exe, the 32-bit build sitting next to it in the same
-# folder - job 7 needs the 64-bit one per the PDF) lives alongside the OSOT
-# exe itself. Only used by roles/osot_finalize_cleanup now (job 7 moved
-# there in the 2026-09-16 split above).
-osot_finalize_sdelete64_installer: "/mnt/wdnfs/Ansible/osot/CHANGEME-sdelete64-installer.exe"   # <- placeholder - real value goes in rdsh_2025_tpl.local.yml
-
-# ---- RDSH login group ----
-# Added to the local Remote Desktop Users group by roles/hardening - see
-# that role's header comment for why RD licensing mode itself is NOT set
-# here. Matches ubt_2404_tpl's linux_login_group in spirit.
-rdsh_login_group: "CHANGEME-ad-group"   # <- placeholder - real AD group name goes in rdsh_2025_tpl.local.yml
-
 # ---- Optional extra apps (roles/apps) ----
 # Empty by default - see that role's header comment for the format. Each
 # entry's installer path is an absolute path on the control node's NFS
 # mount (e.g. "/mnt/wdnfs/Ansible/apps/<file>"), not relative to this image
-# directory - same convention as horizon_agent_installer/dem_agent_installer/
-# appvolumes_agent_installer above. No specific app is baked in; add entries
-# here once you have a verified silent-install command line for whatever you
-# want on this image.
+# directory - same convention rdsh_2025_tpl_agents.yml's installer paths
+# use. No specific app is baked in; add entries here once you have a
+# verified silent-install command line for whatever you want on this image.
 apps_to_install: []
-
-# ---- Horizon farm/pool publish (scripts/publish_to_pool.sh) ----
-# Fixed 2026-09-10: publish_to_pool.sh used to be hardcoded to
-# ubt_2404_tpl's image dir/group_vars and only knew the desktop-pool REST
-# workflow - a real run against an rdsh_2025_tpl build silently resolved
-# ubt_2404_tpl's vars and almost pushed onto HZUBTP1_ref (caught by that
-# script's own confirmation prompt, nothing was pushed). publish_to_pool.sh
-# is now parameterized by image_key and reads horizon_farm_name (this
-# image) vs. horizon_pool_name (ubt_2404_tpl) to pick the right REST
-# workflow - see that script's own "Pool vs farm" header comment for the
-# farm-specific endpoints and how confident to be in them (the farm path
-# is new and, unlike the pool path, has not yet been run for real).
-horizon_connection_server: "cs-srv-01.example.com"   # already safe - generic placeholder hostname
-horizon_farm_name: "CHANGEME-farm-name"   # <- placeholder - real value goes in rdsh_2025_tpl.local.yml (NOT horizon_pool_name - RDSH publishes to a Farm)
-horizon_api_username: "CHANGEME-api-username"   # <- placeholder - real value goes in rdsh_2025_tpl.local.yml
-horizon_api_domain: "example.com"   # already safe - generic placeholder domain
-# vault_horizon_api_password goes in inventory/group_vars/all/vault.yml,
-# same entry ubt_2404_tpl.yml already uses (shared, not per-image).

@@ -1,27 +1,27 @@
 # inventory/group_vars/rdsh_2025_tpl.local.yml.example
 #
-# Template for this control node's real, site-specific overrides. Copy this
-# file to rdsh_2025_tpl.local.yml (same directory, no ".example" suffix) and
-# fill in real values - that filename is .gitignore'd (see the .gitignore
-# right here in this directory), so it never gets committed, unlike this
-# .example file which IS committed on purpose, to document the expected
-# shape for the next person who sets up a control node.
+# Template for this control node's real, site-specific overrides - covers
+# every CHANGEME-* placeholder across all three committed files for this
+# image (rdsh_2025_tpl.yml, rdsh_2025_tpl_agents.yml, rdsh_2025_tpl_osot.yml).
+# Copy this file to rdsh_2025_tpl.local.yml (same directory, no ".example"
+# suffix) and fill in real values - that filename is .gitignore'd (see the
+# .gitignore right here in this directory), so it never gets committed,
+# unlike this .example file which IS committed on purpose, to document the
+# expected shape for the next person who sets up a control node.
 #
-# scripts/build.sh and scripts/publish_to_pool.sh both load this file
-# automatically if it exists (right after the committed rdsh_2025_tpl.yml,
-# so these values override that file's own placeholders) - nothing else to
-# wire up once it's in place with real values.
+# scripts/build.sh and scripts/publish_to_pool.sh load this file
+# automatically if it exists - last, after all three committed files above,
+# so these values always win over any of their CHANGEME-* placeholders -
+# nothing else to wire up once it's in place with real values.
 #
 # Only include the keys you actually need to override. Anything left out
-# here just falls through to whatever rdsh_2025_tpl.yml already has.
-#
-# Extended 2026-09-17, per the user's explicit request, from just the
-# network fields to every site-specific value in rdsh_2025_tpl.yml - each
-# CHANGEME-* placeholder there has a matching entry below.
+# here just falls through to whatever the matching committed file already
+# has. Which committed file a key's placeholder originally came from
+# doesn't matter here - Ansible just merges everything by key name.
 
 # Real reserved IP/gateway/DNS servers for this control node's network -
-# see rdsh_2025_tpl.yml's own "Guest network" comment for why these three
-# specifically don't belong in the committed file (this repo is public).
+# see rdsh_2025_tpl.yml's history for why these three specifically never
+# belong in a committed file (this repo is public).
 guest_ip_cidr: "203.0.113.170/24"     # <- REPLACE with your real reserved IP/prefix
 guest_gateway: "203.0.113.1"          # <- REPLACE with your real gateway
 guest_dns_servers:
@@ -29,41 +29,38 @@ guest_dns_servers:
   - "203.0.113.20"
 
 # Real MAC address for this VM's DHCP reservation/MAC allowlisting, if you
-# use one - leave unset (or "") to let vSphere auto-assign instead, same as
-# the committed file's default.
+# use one - leave unset (or "") to let vSphere auto-assign instead.
 mac_address: "00:50:56:00:xx:xx"      # <- REPLACE with your real MAC, or delete this line to auto-assign
 
 # ---- vCenter placement ----
 # Real cluster/datastore/folder/port-group names for this control node's
-# vCenter.
+# vCenter. vcenter_folder can be a nested path (e.g. "EUC/Desktops/HZ-Templates")
+# if your real template folder isn't at the top level of the datacenter's VM
+# folder - check the exact path in vCenter before assuming a bare name is
+# enough, a name that also exists elsewhere in the tree will resolve to the
+# wrong folder silently.
 vcenter_cluster: "REPLACE-ME"         # <- REPLACE with your real cluster name
 vcenter_datastore: "REPLACE-ME"       # <- REPLACE with your real datastore name
-vcenter_folder: "REPLACE-ME"          # <- REPLACE with your real VM folder
+vcenter_folder: "REPLACE-ME"          # <- REPLACE with your real VM folder (bare name, or a nested "Parent/Child" path)
 vcenter_network: "REPLACE-ME"         # <- REPLACE with your real port group
 
 # ---- Install media ----
 # Real ISO path, using the same "[datastore] path" syntax as the committed
-# file - see rdsh_2025_tpl.yml's own "Install media" comment for why this
-# can't be an NFS path.
+# file - see rdsh_2025_tpl.yml's history for why this can't be an NFS path.
 iso_paths:
   - "[REPLACE-ME] ISO/REPLACE-ME.iso"   # <- REPLACE with your real datastore + ISO filename
   - "[] /vmimages/tools-isoimages/windows.iso"   # generic ESXi-provided path, no need to override this one
 
-# ---- NFS-hosted installer paths ----
+# ---- NFS-hosted installer paths (rdsh_2025_tpl_agents.yml / rdsh_2025_tpl_osot.yml) ----
 # Real absolute paths on this control node's NFS mount for each installer -
-# same /mnt/wdnfs/Ansible/<component>/<file> convention the committed file
-# documents.
+# same /mnt/wdnfs/Ansible/<component>/<file> convention those files document.
 horizon_agent_installer: "/mnt/wdnfs/Ansible/horizon/REPLACE-ME.exe"
 dem_agent_installer: "/mnt/wdnfs/Ansible/dem/REPLACE-ME.msi"
 appvolumes_agent_installer: "/mnt/wdnfs/Ansible/appvolumes/REPLACE-ME.msi"
 osot_installer: "/mnt/wdnfs/Ansible/osot/REPLACE-ME.exe"
 osot_finalize_sdelete64_installer: "/mnt/wdnfs/Ansible/osot/REPLACE-ME.exe"
 
-# ---- RDSH login group ----
-# Real AD group name added to the local Remote Desktop Users group.
-rdsh_login_group: "REPLACE-ME"        # <- REPLACE with your real AD group name
-
-# ---- Horizon farm/pool publish ----
+# ---- Horizon farm/pool publish (rdsh_2025_tpl_agents.yml) ----
 # Real Horizon farm name and API username used by scripts/publish_to_pool.sh.
 horizon_farm_name: "REPLACE-ME"       # <- REPLACE with your real farm name
 horizon_api_username: "REPLACE-ME"    # <- REPLACE with your real API username

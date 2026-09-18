@@ -133,17 +133,31 @@ if [ ! -f "$GROUP_VARS_FILE" ]; then
   exit 1
 fi
 
-# ---- Local, untracked overrides (ADDED 2026-09-17) ----
+# ---- Local, untracked overrides (ADDED 2026-09-17, extended 2026-09-18) ----
 # Same mechanism as scripts/build.sh's own "Local, untracked overrides"
 # block - see that file's comment for the full rationale (real
 # site-specific values, like guest_ip_cidr/guest_gateway/guest_dns_servers,
 # kept out of this public repo via an optional, .gitignore'd
-# inventory/group_vars/${IMAGE_KEY}.local.yml). This script resolves vars
-# independently of build.sh (it can be run standalone - see this file's own
-# header), so it needs the same local-file check rather than assuming
-# build.sh already handled it.
-LOCAL_VARS_FILE="$PROJECT_ROOT/inventory/group_vars/${IMAGE_KEY}.local.yml"
+# inventory/group_vars/${IMAGE_KEY}.local.yml) and for why
+# ${IMAGE_KEY}_agents.yml / ${IMAGE_KEY}_osot.yml are also loaded here now
+# (both committed, non-secret - horizon_farm_name/horizon_api_username in
+# particular, which THIS script needs, now live in ${IMAGE_KEY}_agents.yml).
+# This script resolves vars independently of build.sh (it can be run
+# standalone - see this file's own header), so it needs the same file
+# checks rather than assuming build.sh already handled them.
 GROUP_VARS_ARGS=(-e "@$GROUP_VARS_FILE")
+
+AGENTS_VARS_FILE="$PROJECT_ROOT/inventory/group_vars/${IMAGE_KEY}_agents.yml"
+if [ -f "$AGENTS_VARS_FILE" ]; then
+  GROUP_VARS_ARGS+=(-e "@$AGENTS_VARS_FILE")
+fi
+
+OSOT_VARS_FILE="$PROJECT_ROOT/inventory/group_vars/${IMAGE_KEY}_osot.yml"
+if [ -f "$OSOT_VARS_FILE" ]; then
+  GROUP_VARS_ARGS+=(-e "@$OSOT_VARS_FILE")
+fi
+
+LOCAL_VARS_FILE="$PROJECT_ROOT/inventory/group_vars/${IMAGE_KEY}.local.yml"
 if [ -f "$LOCAL_VARS_FILE" ]; then
   echo "==> Using local overrides from $LOCAL_VARS_FILE (not tracked in git)"
   GROUP_VARS_ARGS+=(-e "@$LOCAL_VARS_FILE")

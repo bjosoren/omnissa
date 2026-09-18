@@ -41,16 +41,19 @@
 # image that's never domain-joined, so this role now documents the
 # requirement instead of attempting - and failing - it locally.
 #
-# rdsh_login_group stays defined in inventory/group_vars/rdsh_2025_tpl.yml
-# purely as documentation of which group the GPO needs to target - it is
-# NOT consumed by any task anymore.
+# rdsh_login_group (the group_vars variable that used to document which AD
+# group the GPO needs to target) was REMOVED 2026-09-18, per the user's
+# explicit request - it was never consumed by any task, only referenced in
+# this debug message's text, so removing it needed this one update to stop
+# referencing it. The real AD group name lives wherever you track your GPO
+# configuration now (ADUC / your GPO documentation), not in this repo.
 - name: RDSH login group must be added to Remote Desktop Users via GPO, not here
   ansible.builtin.debug:
     msg: >-
-      rdsh_login_group ({{ rdsh_login_group | default('not set') }}) is NOT
-      added to local Remote Desktop Users by this build - it can't be, this
-      golden image is never domain-joined (see this role's header comment).
-      Add it via a Restricted Groups / Group Policy Preferences GPO scoped
-      to the OU Horizon joins spawned RDSH hosts into instead - same
-      approach already used for RD licensing mode. RDSH session logins
-      will fail for this group until that GPO exists and has applied.
+      This build does NOT add any login group to local Remote Desktop Users
+      - it can't, this golden image is never domain-joined (see this role's
+      header comment). Add your RDSH login group via a Restricted Groups /
+      Group Policy Preferences GPO scoped to the OU Horizon joins spawned
+      RDSH hosts into instead - same approach already used for RD licensing
+      mode. RDSH session logins will fail until that GPO exists, targets
+      the correct AD group, and has applied.

@@ -1,0 +1,77 @@
+# inventory/group_vars/rdsh_2025_tpl_agents.yml
+# Non-secret Horizon Agent / DEM / App Volumes feature-toggle and Horizon
+# farm/pool publish settings for rdsh_2025_tpl - split out of
+# rdsh_2025_tpl.yml on 2026-09-18, per the user's explicit request, purely
+# to keep that file to VM-shape/build settings. Nothing here is more or
+# less public than what was already committed in rdsh_2025_tpl.yml.
+#
+# scripts/build.sh and scripts/publish_to_pool.sh load this file
+# automatically (right after rdsh_2025_tpl.yml, before rdsh_2025_tpl.local.yml)
+# if it exists - nothing else to wire up. Every *_installer path,
+# horizon_farm_name, and horizon_api_username below is a PLACEHOLDER, same
+# convention rdsh_2025_tpl.yml used before this split - real values go in
+# rdsh_2025_tpl.local.yml (this repo is public).
+
+# ---- Horizon Agent (RDSH mode) ----
+# ADDLOCAL feature toggles - playbook.yml's horizon_agent role builds the
+# ADDLOCAL string from these. Defaults below mirror the source guide's own
+# RDSH-tuned choices (NGVC on for instant-clone RDSH, PrintRedir/PSG on as
+# RDSH-relevant, RDP/RDSH3D off unless you have vGPU-backed 3D RDSH).
+horizon_agent_installer: "/mnt/wdnfs/Ansible/horizon/CHANGEME-horizon-agent-installer.exe"   # <- placeholder - real value (on your NFS share's horizon/ folder) goes in rdsh_2025_tpl.local.yml
+horizon_vc_managed: true
+horizon_core: true
+horizon_blast: true
+horizon_usb: true
+horizon_ngvc: true              # required for instant-clone RDSH
+horizon_rtav: true
+horizon_cdr: true
+horizon_serial_port: false
+horizon_scanner: false
+horizon_geolocation: false
+horizon_smartcard: true
+horizon_audio: true
+horizon_mmr: true
+horizon_rdp: false
+horizon_rdsh3d: false           # enable with vGPU for 3D RDSH
+horizon_sdo_sensor: false
+horizon_perf_tracker: true
+horizon_help_desk: true
+horizon_print_redir: false       # important for RDSH - session-scoped printer redirection
+horizon_psg: true
+horizon_url_filtering: false
+
+# ---- DEM Agent ----
+dem_agent_installer: "/mnt/wdnfs/Ansible/dem/CHANGEME-dem-agent-installer.msi"   # <- placeholder - real value (on your NFS share's dem/ folder) goes in rdsh_2025_tpl.local.yml
+dem_flex_engine: true
+dem_flex_migrate: false
+dem_self_support: true
+dem_mgmt_console: false
+dem_integration_enabled: false
+dem_noad_config: ""
+dem_comp_env_config: ""
+
+# ---- App Volumes Agent ----
+appvolumes_agent_installer: "/mnt/wdnfs/Ansible/appvolumes/CHANGEME-appvolumes-agent-installer.msi"   # <- placeholder - real value (on your NFS share's appvolumes/ folder) goes in rdsh_2025_tpl.local.yml
+appvolumes_manager: "appvol.example.com"   # already safe - generic placeholder hostname
+appvolumes_port: 443
+appvolumes_ssl_validation: 1
+
+# ---- Horizon farm/pool publish (scripts/publish_to_pool.sh) ----
+# Fixed 2026-09-10: publish_to_pool.sh used to be hardcoded to
+# ubt_2404_tpl's image dir/group_vars and only knew the desktop-pool REST
+# workflow - a real run against an rdsh_2025_tpl build silently resolved
+# ubt_2404_tpl's vars and almost pushed onto HZUBTP1_ref (caught by that
+# script's own confirmation prompt, nothing was pushed). publish_to_pool.sh
+# is now parameterized by image_key and reads horizon_farm_name (this
+# image) vs. horizon_pool_name (ubt_2404_tpl) to pick the right REST
+# workflow - see that script's own "Pool vs farm" header comment for the
+# farm-specific endpoints and how confident to be in them (the farm path
+# was new as of that fix and has since been confirmed working against a
+# real farm - see rdsh_2025_tpl_osot.yml's neighbor, this pipeline's
+# 2026-09-17 build log).
+horizon_connection_server: "cs-srv-01.example.com"   # already safe - generic placeholder hostname
+horizon_farm_name: "CHANGEME-farm-name"   # <- placeholder - real value goes in rdsh_2025_tpl.local.yml (NOT horizon_pool_name - RDSH publishes to a Farm)
+horizon_api_username: "CHANGEME-api-username"   # <- placeholder - real value goes in rdsh_2025_tpl.local.yml
+horizon_api_domain: "example.com"   # already safe - generic placeholder domain
+# vault_horizon_api_password goes in inventory/group_vars/all/vault.yml,
+# same entry ubt_2404_tpl.yml already uses (shared, not per-image).

@@ -142,25 +142,48 @@ if [ ! -f "$GROUP_VARS_FILE" ]; then
   exit 1
 fi
 
-# ---- Local, untracked overrides (ADDED 2026-09-17) ----
+# ---- Local, untracked overrides (ADDED 2026-09-17, extended 2026-09-18) ----
 # inventory/group_vars/${IMAGE_KEY}.yml is committed to this repo, which is
 # public - per the user's explicit request, real site-specific values that
 # shouldn't be public (guest_ip_cidr/guest_gateway/guest_dns_servers today;
-# see that file's own comment on those three for the incident this came
-# from - a real internal /24 briefly ended up committed) live instead in
+# see that file's own history for the incident this came from - a real
+# internal /24 briefly ended up committed) live instead in
 # inventory/group_vars/${IMAGE_KEY}.local.yml, which is .gitignore'd (see
 # inventory/group_vars/.gitignore) and only ever exists locally on each
 # control node, never in git. Entirely optional: if it's not present, every
 # ansible-playbook call below behaves exactly as it did before this change,
-# using only the committed (placeholder-safe) group_vars file. When it IS
-# present, it's loaded via its own -e "@..." AFTER $GROUP_VARS_FILE, so its
-# values win over the committed placeholders (later -e flags take
-# precedence in Ansible) without editing or overriding the whole file.
+# using only the committed (placeholder-safe) vars files. When it IS
+# present, it's loaded via its own -e "@..." AFTER every other vars file
+# for this image, so its values win over any of their CHANGEME-*
+# placeholders (later -e flags take precedence in Ansible) without editing
+# or overriding any of those files directly.
+#
+# rdsh_2025_tpl_agents.yml / rdsh_2025_tpl_osot.yml (ADDED 2026-09-18, per
+# the user's explicit request): split out of rdsh_2025_tpl.yml to keep that
+# file to VM-shape/build settings only - both are committed, non-secret,
+# and loaded the same optional way ${IMAGE_KEY}.local.yml is (only if
+# present), so an image without these files (ubt_2404_tpl today) is
+# unaffected either way.
+#
 # GROUP_VARS_ARGS is built once here and reused by every ansible-playbook
 # call in this script (and the equivalent block in publish_to_pool.sh),
-# rather than repeating the same "if local file exists" check five times.
-LOCAL_VARS_FILE="$PROJECT_ROOT/inventory/group_vars/${IMAGE_KEY}.local.yml"
+# rather than repeating the same "if this file exists" check at every call
+# site. Order matters: ${IMAGE_KEY}.local.yml is added LAST, so it
+# overrides a CHANGEME-* placeholder regardless of which of the three
+# committed vars files above originally declared it.
 GROUP_VARS_ARGS=(-e "@$GROUP_VARS_FILE")
+
+AGENTS_VARS_FILE="$PROJECT_ROOT/inventory/group_vars/${IMAGE_KEY}_agents.yml"
+if [ -f "$AGENTS_VARS_FILE" ]; then
+  GROUP_VARS_ARGS+=(-e "@$AGENTS_VARS_FILE")
+fi
+
+OSOT_VARS_FILE="$PROJECT_ROOT/inventory/group_vars/${IMAGE_KEY}_osot.yml"
+if [ -f "$OSOT_VARS_FILE" ]; then
+  GROUP_VARS_ARGS+=(-e "@$OSOT_VARS_FILE")
+fi
+
+LOCAL_VARS_FILE="$PROJECT_ROOT/inventory/group_vars/${IMAGE_KEY}.local.yml"
 if [ -f "$LOCAL_VARS_FILE" ]; then
   echo "==> Using local overrides from $LOCAL_VARS_FILE (not tracked in git)"
   GROUP_VARS_ARGS+=(-e "@$LOCAL_VARS_FILE")
