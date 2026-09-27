@@ -1,5 +1,7 @@
 ---
 # roles/store_apps_cleanup/tasks/main.yml
+- name: Confirm no pending reboot before this phase
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/wait_for_no_pending_reboot.yml"
 # Removes Store-delivered apps that don't belong on an RDSH multi-session
 # host - per the user's explicit 16-step sequence (step 9: "Clean Store
 # Apps") and both attached Omnissa PDFs, which call this out as its own

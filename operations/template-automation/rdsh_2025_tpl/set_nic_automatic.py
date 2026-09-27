@@ -1,44 +1,27 @@
 #!/usr/bin/env python3
 """
-set_nic_automatic.py - invoked by post_build_snapshot.yml (see the task
-"Flip the published clone's inherited NIC to Automatic MAC" there) as the
-last step of getting the published clone off vm_name's pinned MAC.
+set_nic_automatic.py - flips a VM's network adapter to an auto-generated
+MAC address, removing any manually-pinned MAC. Invoked by
+post_build_snapshot.yml against vm_name, right after Packer shuts it down
+and before it gets cloned - this keeps the build VM from ever exposing a
+pinned MAC/IP that could collide with the published clone or the next
+build's own guest.
 
-Flips an existing VM's first Ethernet adapter from Manual to Automatic MAC
-address type via a SINGLE in-place reconfigure of that same device - the
-same operation as vCenter's Edit Settings "MAC Address: Automatic"
-dropdown. This replaced an earlier two-task delete-then-recreate approach
-(via community.vmware.vmware_guest_network) that, per that module's own
-docs, should have produced the same result but in real-world testing did
-not: both tasks reported success, yet Edit Settings kept showing the
-adapter as Manual with the clone's inherited (pinned) MAC, and Horizon's
-instant-clone forking kept handing every spawned VDI that same MAC/IP
-identity as a result. A real, confirmed fix - manually flipping the
-dropdown to Automatic in vCenter's UI - was traced to a single in-place
-reconfigure of the existing device, not a remove/re-add, which this script
-reproduces directly via pyVmomi rather than through vmware_guest_network
-(which has no equivalent "reset this adapter to auto-generated" option).
+Does a genuine remove-then-add of the adapter (a new VirtualVmxnet3 device
+on the same portgroup, rather than an in-place field edit on the existing
+device) - an in-place edit of addressType/macAddress on the same device
+object is not equivalent to a real device removal + addition, even though
+both eventually show "Automatic" in Edit Settings. Also forces
+connectable.startConnected = True on the new device, since nothing else
+sets that explicitly and a disconnected NIC on the resulting clone/image
+would be a problem.
 
-Note: the vSphere API reports the result back as addressType='assigned'
-rather than 'generated' - both are vCenter-generated (not user-pinned)
-addresses and both display identically as "Automatic" in the vSphere
-Client; 'assigned' is simply what a vCenter-managed VM gets since vCenter,
-not the ESXi host, is doing the allocating. Confirmed directly: Edit
-Settings on the fixed VM shows "Automatic", same as the working manual fix.
-
-Also forces connectable.startConnected (Edit Settings' "Connect At Power
-On") to True on the same device, in the same reconfigure. Nothing in this
-project ever explicitly sets that field - not here, not in playbook.yml,
-not in any role - so its being unchecked on the published clone traces
-back to the clone task itself: community.vmware.vmware_guest's clone path,
-given a bare `networks: [{name: ...}]` with no connected/start_connected
-key, doesn't appear to carry over the source adapter's true value. Left
-unfixed, every VDI Horizon forks from this VM would inherit a NIC that's
-disconnected at boot - a real image, right MAC and all, that still can't
-reach the network. Setting connected the same way as addressType (a direct
-field edit on the live device object, not a rebuilt one) means every other
-property of the adapter - including this one, if it's ever fixed upstream
-in the clone task - keeps flowing through untouched.
+Network/portgroup is read off the existing adapter's own backing before
+it's removed, and reapplied to the new device unchanged - this script only
+ever changes MAC allocation and connection state, never which network the
+VM is on. Handles both a standard vSwitch portgroup
+(VirtualEthernetCard.NetworkBackingInfo) and a distributed portgroup
+(DistributedVirtualPortBackingInfo).
 
 Reads connection details from environment variables (not argv) so nothing
 sensitive ends up in `ps` output:
@@ -66,6 +49,31 @@ def find_vm_by_name(content, name):
     return None
 
 
+def backing_for_same_network(old_backing):
+    """Build a fresh backing object pointing at the same network the
+    existing adapter was using, whether that's a standard portgroup or a
+    distributed one. Raises if the existing backing type isn't one of
+    those two, rather than guessing."""
+    if isinstance(old_backing, vim.vm.device.VirtualEthernetCard.NetworkBackingInfo):
+        new_backing = vim.vm.device.VirtualEthernetCard.NetworkBackingInfo()
+        new_backing.deviceName = old_backing.deviceName
+        new_backing.network = old_backing.network
+        return new_backing, old_backing.deviceName
+
+    if isinstance(old_backing, vim.vm.device.VirtualEthernetCard.DistributedVirtualPortBackingInfo):
+        new_backing = vim.vm.device.VirtualEthernetCard.DistributedVirtualPortBackingInfo()
+        new_backing.port = vim.dvs.PortConnection()
+        new_backing.port.portgroupKey = old_backing.port.portgroupKey
+        new_backing.port.switchUuid = old_backing.port.switchUuid
+        return new_backing, f"dvportgroup {old_backing.port.portgroupKey!r}"
+
+    raise TypeError(
+        f"existing adapter's backing is {type(old_backing).__name__!r} - "
+        "neither a standard portgroup nor a distributed portgroup, don't "
+        "know how to carry this network forward safely"
+    )
+
+
 def main():
     host = os.environ["VC_HOST"]
     user = os.environ["VC_USER"]
@@ -84,42 +92,49 @@ def main():
             print(f"ERROR: no VM named {vm_name!r} found", file=sys.stderr)
             sys.exit(1)
 
-        nic = None
+        old_nic = None
         for device in vm.config.hardware.device:
             if isinstance(device, vim.vm.device.VirtualEthernetCard):
-                nic = device
+                old_nic = device
                 break
 
-        if nic is None:
+        if old_nic is None:
             print(f"ERROR: {vm_name!r} has no Ethernet adapter", file=sys.stderr)
             sys.exit(1)
 
-        start_connected_before = (
-            nic.connectable.startConnected if nic.connectable is not None else None
+        old_start_connected = (
+            old_nic.connectable.startConnected if old_nic.connectable is not None else None
         )
-        print(f"Found {nic.deviceInfo.label} on {vm_name} - current "
-              f"addressType={nic.addressType!r} macAddress={nic.macAddress!r} "
-              f"startConnected={start_connected_before!r}")
+        print(f"Found {old_nic.deviceInfo.label} on {vm_name} - current "
+              f"type={type(old_nic).__name__} addressType={old_nic.addressType!r} "
+              f"macAddress={old_nic.macAddress!r} startConnected={old_start_connected!r}")
 
-        nic.addressType = "generated"
-        nic.macAddress = ""
+        new_backing, network_desc = backing_for_same_network(old_nic.backing)
+        print(f"Carrying network forward unchanged: {network_desc}")
 
-        if nic.connectable is None:
-            # No connectable block at all is unusual but not impossible -
-            # build a minimal one rather than assume it exists.
-            nic.connectable = vim.vm.device.VirtualDevice.ConnectInfo()
-        nic.connectable.startConnected = True
-        # Deliberately not touching .connected here - that's the LIVE
-        # runtime connection state, meaningless (and not reliably settable)
-        # on a VM that's powered off, which this one always is at this
-        # point in the pipeline. startConnected is what actually persists
-        # and is what Edit Settings' "Connect At Power On" reflects.
+        new_nic = vim.vm.device.VirtualVmxnet3()
+        new_nic.backing = new_backing
+        new_nic.addressType = "generated"
+        new_nic.wakeOnLanEnabled = True
+        new_nic.connectable = vim.vm.device.VirtualDevice.ConnectInfo()
+        new_nic.connectable.startConnected = True
+        new_nic.connectable.allowGuestControl = True
+        new_nic.connectable.connected = False  # meaningless while powered off; set explicitly for clarity
+        new_nic.deviceInfo = vim.Description()
+        new_nic.deviceInfo.label = old_nic.deviceInfo.label
+        new_nic.deviceInfo.summary = network_desc
+        new_nic.key = -1  # negative key = "this is a new device", vCenter assigns the real one
+
+        remove_spec = vim.vm.device.VirtualDeviceSpec()
+        remove_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.remove
+        remove_spec.device = old_nic
+
+        add_spec = vim.vm.device.VirtualDeviceSpec()
+        add_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.add
+        add_spec.device = new_nic
 
         spec = vim.vm.ConfigSpec()
-        dev_spec = vim.vm.device.VirtualDeviceSpec()
-        dev_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.edit
-        dev_spec.device = nic
-        spec.deviceChange = [dev_spec]
+        spec.deviceChange = [remove_spec, add_spec]
 
         task = vm.ReconfigVM_Task(spec=spec)
         while task.info.state in (vim.TaskInfo.State.running, vim.TaskInfo.State.queued):
@@ -136,8 +151,8 @@ def main():
                     device.connectable.startConnected
                     if device.connectable is not None else None
                 )
-                print(f"After reconfigure - addressType={device.addressType!r} "
-                      f"macAddress={device.macAddress!r} "
+                print(f"After reconfigure - type={type(device).__name__} "
+                      f"addressType={device.addressType!r} macAddress={device.macAddress!r} "
                       f"startConnected={after_start_connected!r}")
                 break
 

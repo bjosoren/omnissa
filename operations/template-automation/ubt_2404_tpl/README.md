@@ -31,7 +31,7 @@ and `inventory/group_vars/ubt_2404_tpl.yml` (goes under
 
    ```ini
    [ubt_2404_tpl]
-   ubt_2404_tpl ansible_host=192.0.2.50
+   ubt_2404_tpl ansible_host=10.10.20.50
    ```
 
    Use the same IP as `guest_ip_cidr` in `group_vars/ubt_2404_tpl.yml`.

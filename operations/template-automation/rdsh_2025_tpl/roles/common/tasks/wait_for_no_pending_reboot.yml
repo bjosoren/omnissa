@@ -1,0 +1,57 @@
+---
+# roles/common/tasks/wait_for_no_pending_reboot.yml
+#
+# Shared pre-phase guard, imported as the FIRST task in every role's
+# tasks/main.yml (playbook.yml's own roles: list is unchanged - each role
+# pulls this in itself rather than playbook.yml interleaving it between
+# role: entries, which Ansible's roles: keyword doesn't support anyway).
+#
+# ADDED 2026-09-18, per the user's explicit request, after real builds
+# showed a VM landing on a fresh logon screen and then rebooting itself
+# again on its own - traced to a pending reboot/servicing state (Sysprep
+# Generalize's post-reboot AppX package provisioning, per Omnissa's own
+# "Manually creating optimized Windows images for Horizon VMs" PDF, which
+# says to wait 1-2 minutes after first login post-Generalize for AppX
+# provisioning to finish) being left outstanding at the end of one phase
+# and only surfacing as instability at the start of the next, or after the
+# whole pipeline finished and the resulting VM was powered on independently.
+# roles/vmware_tools/tasks/main.yml's own end-of-role settle loop was the
+# only place this was checked before now (added earlier for a real
+# 0x800f0922 failure in rds_role_install - see that role's own header) -
+# this generalizes the exact same check to run before every phase, not
+# just after VMware Tools.
+#
+# Reuses the exact same two registry markers vmware_tools has always
+# checked (Component Based Servicing RebootPending, Windows Update
+# RebootRequired) - deliberately not adding any additional detection here
+# (e.g. PendingFileRenameOperations, an AppX-provisioning-specific check)
+# beyond what's already proven, so this stays one single proven check
+# reused everywhere rather than a second, different one.
+#
+# Bounded at wait_for_no_pending_reboot_max_rounds (default 4, matching
+# vmware_tools' own original limit) rounds of check-and-reboot before
+# failing loudly - see _wait_for_no_pending_reboot_round.yml for the
+# per-round logic (a separate file because Ansible can't loop a single
+# task through "check, maybe reboot, check again").
+
+- name: "Reset the pending-reboot round tracker"
+  ansible.builtin.set_fact:
+    _wfnpr_pending: true
+
+- name: "{{ wait_for_no_pending_reboot_label | default('Confirm no pending reboot before this phase') }}"
+  ansible.builtin.include_tasks: _wait_for_no_pending_reboot_round.yml
+  loop: "{{ range(1, (wait_for_no_pending_reboot_max_rounds | default(4)) + 1) | list }}"
+  loop_control:
+    loop_var: _wfnpr_round
+  when: _wfnpr_pending | bool
+
+- name: "Fail if a reboot is still pending after {{ wait_for_no_pending_reboot_max_rounds | default(4) }} rounds"
+  ansible.builtin.fail:
+    msg: >-
+      Still shows a pending reboot after
+      {{ wait_for_no_pending_reboot_max_rounds | default(4) }} rounds of
+      checking/rebooting, before this phase could start - something is
+      genuinely stuck rather than just multi-wave servicing/AppX
+      provisioning settling. Console into the VM and check CBS.log /
+      TiWorker.exe by hand before re-running.
+  when: _wfnpr_pending | bool

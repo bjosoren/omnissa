@@ -1,5 +1,7 @@
 ---
 # roles/dem/tasks/main.yml
+- name: Confirm no pending reboot before this phase
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/wait_for_no_pending_reboot.yml"
 # Adapted from the source guide's rdsh_06_install_dem.yml. ADDLOCAL feature
 # list built from group_vars the same way roles/horizon_agent does.
 - name: Build DEM ADDLOCAL feature list

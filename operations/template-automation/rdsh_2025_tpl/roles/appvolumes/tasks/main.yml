@@ -1,5 +1,7 @@
 ---
 # roles/appvolumes/tasks/main.yml
+- name: Confirm no pending reboot before this phase
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/wait_for_no_pending_reboot.yml"
 # Adapted from the source guide's rdsh_07_install_appvolumes.yml.
 - name: Copy App Volumes Agent installer to VM
   # appvolumes_agent_installer is an absolute NFS mount path, not relative

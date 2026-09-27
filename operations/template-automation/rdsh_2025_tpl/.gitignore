@@ -2,3 +2,4 @@ logs/
 .packer_cache/
 packer_cache/
 .packer_vars.json
+build_logs/

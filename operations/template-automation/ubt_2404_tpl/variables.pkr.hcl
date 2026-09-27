@@ -113,7 +113,7 @@ variable "guest_hostname" {
 
 variable "guest_ip_cidr" {
   type = string
-  # e.g. "192.0.2.50/24" - reserve this address ahead of time, see the platform post
+  # e.g. "10.10.20.50/24" - reserve this address ahead of time, see the platform post
 }
 
 variable "guest_gateway" {

@@ -1,5 +1,7 @@
 ---
 # roles/enter_audit_mode/tasks/main.yml
+- name: Confirm no pending reboot before this phase
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/wait_for_no_pending_reboot.yml"
 # REWRITTEN 2026-09-16: this role no longer ENTERS Audit Mode - it now just
 # VERIFIES the guest is already in it, and fails fast with a clear message
 # if not. Audit Mode entry moved to floppy/autounattend.pkrtpl.hcl itself

@@ -1,4 +1,3 @@
----
 # roles/vmware_tools/tasks/main.yml
 # Unlike ubt_2404_tpl (which installs open-vm-tools-desktop via apt inside
 # its own vmware_tools role), VMware Tools for this image is already
@@ -20,6 +19,18 @@
 # own verification logic below (VMTools service check) is unaffected either
 # way - it doesn't care which pass installed the service, only that it's
 # there by the time this role runs.
+#
+# UPDATED 2026-09-18: now imports roles/common/tasks/wait_for_no_pending_reboot.yml
+# as its very first task, same as every other role in playbook.yml - see
+# that file's own header for why. This is a DIFFERENT check than this
+# role's own end-of-file settle loop below: the shared task guards against
+# anything left pending from an EARLIER phase (base, in this role's case -
+# cheap/near-instant here since base does no guest work that could leave a
+# reboot pending), while this role's own loop settles reboots caused by ITS
+# OWN work (VMware Tools' suppressed driver-install reboot). Both stay.
+- name: Confirm no pending reboot before this phase
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/wait_for_no_pending_reboot.yml"
+
 - name: Verify VMware Tools service is present and running
   ansible.windows.win_service_info:
     name: VMTools
@@ -127,3 +138,11 @@
 - name: Show pending-reboot settle result
   ansible.builtin.debug:
     msg: "Pending reboot state after VMware Tools install: {{ reboot_check_4.stdout | trim }}"
+
+# ADDED 2026-09-20 - see roles/common/tasks/log_phase_complete.yml's own
+# header for the full rationale (one running C:\ProgramData\Omnissa\Logs\
+# build_phase_log.txt entry per role, imported as every role's LAST task,
+# the mirror of wait_for_no_pending_reboot.yml at the top of this same
+# file being imported as every role's FIRST task).
+- name: Log phase completion
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/log_phase_complete.yml"

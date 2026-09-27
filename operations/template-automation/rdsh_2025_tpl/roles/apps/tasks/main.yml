@@ -1,5 +1,7 @@
 ---
 # roles/apps/tasks/main.yml
+- name: Confirm no pending reboot before this phase
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/wait_for_no_pending_reboot.yml"
 # NFS-drop-folder pattern, same idea as ubt_2404_tpl's own "apps" role and
 # its README's "Adding a custom app to the gold image" section - drop an
 # installer onto the control node's NFS mount, add one entry to

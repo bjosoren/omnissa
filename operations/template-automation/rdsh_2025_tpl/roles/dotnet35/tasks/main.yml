@@ -1,5 +1,7 @@
 ---
 # roles/dotnet35/tasks/main.yml
+- name: Confirm no pending reboot before this phase
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/wait_for_no_pending_reboot.yml"
 # Enables .NET Framework 3.5 (NetFx3) from the mounted Windows Server
 # install media - per Omnissa's own "Manually creating optimized Windows
 # images for Horizon VMs" guide (DISM /Online /Enable-Feature

@@ -1,5 +1,7 @@
 ---
 # roles/rds_role_install/tasks/main.yml
+- name: Confirm no pending reboot before this phase
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/wait_for_no_pending_reboot.yml"
 # Adapted from the source guide's rdsh_05_install_horizon.yml (the RDS-role
 # half of it - see roles/horizon_agent for the agent-install half, split
 # into its own role here since they're two distinct concerns even though

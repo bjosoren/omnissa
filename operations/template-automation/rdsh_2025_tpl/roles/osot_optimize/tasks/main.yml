@@ -389,6 +389,16 @@
       - "Process cleanup: {{ osot_optimize_cleanup.stdout | default('(no output)') }}"
 
 - name: Copy OSOT's own Optimize log into build_log_dir
+  # Ref: Omnissa's "Run Windows OS Optimization Tool for Horizon from
+  # Command Line" (docs.omnissa.com/Optimizing-Images-for-Horizon/
+  # RunWindowsOSOptimizationToolforHorizonfromCommandLine) - documents -o's
+  # own switches; the log-copy mechanics below were worked out empirically
+  # (see the rest of this comment), since that doc doesn't cover default
+  # log paths. osot_generalize_report.log / osot_finalize_cleanup_report.log
+  # follow this exact same pattern for -g / -f, added 2026-09-20 - see
+  # those roles' own copy tasks (their filename guess is NOT yet verified
+  # the way this one - Optimize_*.log - was).
+  #
   # ADDED 2026-09-15 after real-build testing showed OSOT's own -r flag
   # (report_file_path_name) never actually produces a file, whether given a
   # full file path or - per Omnissa's own CLI doc's contradictory worked
@@ -425,6 +435,15 @@
   when: build_log_enabled | default(true) | bool
   ignore_errors: true
 
+# ADDED 2026-09-21 - opt-in pause (verify_phase_logs_pause, default false)
+# to confirm the copy above actually landed before this role reboots and
+# moves on. See roles/common/tasks/pause_for_log_verification.yml's own
+# header for the full rationale. Marker file is named after this role
+# (osot_optimize) regardless of which of the two passes is running - safe,
+# since that shared task clears its own marker fresh on every import.
+- name: Pause for log verification
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/pause_for_log_verification.yml"
+
 - name: Fail if OSOT Optimize log never reported completion within the 1-hour polling window
   ansible.builtin.fail:
     msg: >-
@@ -459,3 +478,14 @@
     reboot_timeout: 600
     post_reboot_delay: 30
     msg: "Rebooting after OSOT Optimize {{ osot_optimize_pass_label | default('pass') }}"
+
+# ADDED 2026-09-20 - see roles/common/tasks/log_phase_complete.yml's own
+# header for the full rationale. role_detail passes through
+# osot_optimize_pass_label so the two invocations of this role (pass 1
+# before Generalize, pass 2 after - see playbook.yml/meta/main.yml's own
+# allow_duplicates: true) show up as two distinct, labeled lines in
+# build_phase_log.txt instead of two identical "osot_optimize | OK" ones.
+- name: Log phase completion
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/log_phase_complete.yml"
+  vars:
+    role_detail: "{{ osot_optimize_pass_label | default('') }} status={{ osot_optimize_status | default('NONE') }}"

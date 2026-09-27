@@ -1,0 +1,187 @@
+# inventory/group_vars/rdsh_2025_tpl.yml
+# Add this file to your existing ~/golden-images/inventory/group_vars/
+# alongside all.yml and ubt_2404_tpl.yml - same "each image gets its own
+# group_vars file" convention. Nothing here is secret; vault_win_admin_password
+# and vault_horizon_api_password stay in inventory/group_vars/all/vault.yml.
+#
+# RESTRUCTURED 2026-09-18, per the user's explicit request: Horizon Agent /
+# DEM / App Volumes / OSOT settings moved out to their own committed files,
+# so this file stays focused on VM-shape/build and site-specific placement
+# settings:
+#   - rdsh_2025_tpl_agents.yml - Horizon Agent / DEM / App Volumes feature
+#                                toggles, installer-path placeholders, and
+#                                Horizon farm/pool publish settings
+#                                (committed, non-secret)
+#   - rdsh_2025_tpl_osot.yml   - OS Optimization Tool job selection +
+#                                installer-path placeholders (committed,
+#                                non-secret)
+#   - rdsh_2025_tpl.local.yml  - real, site-specific values for every
+#                                CHANGEME-* placeholder across all three
+#                                committed files above (gitignored, never
+#                                committed - see rdsh_2025_tpl.local.yml.example)
+# scripts/build.sh and scripts/publish_to_pool.sh load all of these
+# automatically (see either script's own "Local, untracked overrides"
+# comment) - nothing else to wire up.
+#
+# You need ONE new vault entry for this image that ubt_2404_tpl doesn't have:
+#   ansible-vault edit inventory/group_vars/all/vault.yml
+#   # add: vault_win_admin_password: "<strong password>"
+# This is the plaintext Windows local Administrator / build / WinRM password -
+# see variables.pkr.hcl's build_password comment for why Windows needs this
+# as plaintext rather than the pre-hashed value ubt_2404_tpl's
+# vault_local_admin_password becomes.
+
+# ---- Placement ----
+# PLACEHOLDER VALUES ONLY, on purpose - this repo is public. Real values
+# belong in rdsh_2025_tpl.local.yml on each control node; see the "Guest
+# network" section below for the full mechanism, and
+# rdsh_2025_tpl.local.yml.example (same directory) for every overridable
+# key documented in one place.
+vcenter_cluster: "CHANGEME-cluster"         # <- placeholder - real value goes in rdsh_2025_tpl.local.yml
+vcenter_datastore: "CHANGEME-datastore"     # <- placeholder - real value goes in rdsh_2025_tpl.local.yml
+vcenter_folder: "CHANGEME-folder"           # <- placeholder - real value goes in rdsh_2025_tpl.local.yml (can be a nested path, e.g. "EUC/Desktops/HZ-Templates")
+vcenter_network: "CHANGEME-portgroup"       # <- placeholder - real value goes in rdsh_2025_tpl.local.yml
+
+# ---- Sizing ----
+# RDSH hosts serve multiple concurrent sessions - sized well above
+# ubt_2404_tpl's single-user VDI defaults, per the source guide's own
+# Windows Server RDSH sizing (4 vCPU / 2 cores-per-socket / 16GB / 80GB).
+vm_cpu_count: 4
+vm_cores_per_socket: 2
+vm_mem_size_mb: 16384
+vm_disk_size_mb: 81920
+
+# ---- Guest OS type ----
+# VERIFIED against this vCenter (GPU-02 cluster) via OVF export of a
+# throwaway VM - see variables.pkr.hcl's vm_guest_os_type comment. The
+# "Microsoft Windows Server 2025 (64-bit)" picker entry maps to guestId
+# windows2022srvNext_64Guest here, not windows2025srvNext_64Guest.
+vm_guest_os_type: "windows2022srvNext_64Guest"
+vm_version: 20                                    # hardware version 20+ needed for a native Server 2025 guest profile
+
+# ---- Install media ----
+# iso_paths[0]: the Windows Server 2025 install ISO, already staged on a
+# vSphere-visible datastore - Packer's vsphere-iso builder mounts iso_paths
+# entries directly via the vCenter API (datastore or content library
+# syntax), it can't reach an arbitrary NFS path the way Ansible's win_copy
+# can. iso_paths[1]: the ESXi-provided VMware Tools ISO - "[]" (empty
+# datastore name) resolves against whichever datastore the host itself
+# already serves /vmimages/tools-isoimages/windows.iso from; you should not
+# need to change that second path.
+iso_paths:
+  - "[CHANGEME-datastore] ISO/CHANGEME-windows-server-2025-install.iso"   # <- placeholder - real value goes in rdsh_2025_tpl.local.yml
+  - "[] /vmimages/tools-isoimages/windows.iso"
+
+# ---- Guest network ----
+# Same "reserve ahead of time" convention as ubt_2404_tpl - see that image's
+# own group_vars comment. Windows NetBIOS names cap at 15 characters.
+#
+# NOTE: guest_ip_cidr/guest_gateway/guest_dns_servers below are
+# documentation of the reservation only - nothing in this build's
+# autounattend answer file or playbook.yml actually applies a static IP
+# inside the guest (see variables.pkr.hcl's comment on those three). This
+# only gets the guest .170 in practice if your DHCP server has a
+# reservation binding that address to mac_address below; otherwise the
+# guest will DHCP to whatever address the server hands out.
+#
+# PLACEHOLDER VALUES ONLY, on purpose - this repo is public. The three
+# values below are RFC 5737 TEST-NET-2 (198.51.100.0/24), reserved for
+# documentation and never a real, routable network - not your actual
+# reservation. (They briefly WERE real internal values here for real,
+# which is exactly the mistake this setup now guards against - see
+# below.)
+#
+# Real values belong in inventory/group_vars/rdsh_2025_tpl.local.yml on
+# each control node instead - copy rdsh_2025_tpl.local.yml.example (same
+# directory) to that filename and fill it in there. That file is
+# .gitignore'd and never committed; scripts/build.sh and
+# scripts/publish_to_pool.sh both load it automatically when present and
+# its values override these placeholders (see either script's own "Local,
+# untracked overrides" comment). Only override what you actually need to
+# change - anything left out of the local file falls through to the
+# placeholders here.
+guest_hostname: rdsh-2025-tpl
+guest_ip_cidr: "198.51.100.170/24"    # <- placeholder (TEST-NET-2) - real value goes in rdsh_2025_tpl.local.yml
+guest_gateway: "198.51.100.1"         # <- placeholder (TEST-NET-2) - real value goes in rdsh_2025_tpl.local.yml
+guest_dns_servers:                    # <- placeholders (TEST-NET-2) - real values go in rdsh_2025_tpl.local.yml
+  - "198.51.100.11"
+  - "198.51.100.20"
+
+# ---- MAC address ----
+# This IS actually consumed (rdsh_2025_tpl.pkr.hcl's network_adapters.mac_address)
+# - pin one if this network needs a DHCP reservation or MAC allowlisting;
+# leave "" for auto-assignment. Must be in vSphere's manually-assignable
+# VMware OUI range (00:50:56:00:00:00-00:50:56:3F:FF:FF) and unique on this
+# vCenter. PLACEHOLDER ("" = auto-assign) on purpose - a pinned MAC paired
+# with the real guest_ip_cidr reservation above would together identify a
+# real host on a real network; real value goes in rdsh_2025_tpl.local.yml.
+mac_address: ""     # <- placeholder (auto-assign) - real value goes in rdsh_2025_tpl.local.yml if you need a DHCP reservation/MAC allowlisting
+
+# ---- Windows build ----
+timezone: "W. Europe Standard Time"   # Windows tz display name, not IANA - see variables.pkr.hcl's comment
+win_language: "en-US"
+win_keyboard: "0414:00000414"          # Norwegian layout; "0409:00000409" for US layout
+win_image_name: "Windows Server 2025 Datacenter (Desktop Experience)"   # <- must match install.wim exactly, see variables.pkr.hcl comment
+win_kms_key: "D764K-2NDRG-47T6Q-P8T8W-YP6DF"   # Server 2025 Datacenter GVLK (generic volume-license placeholder, not a real key)
+win_full_name: "Administrator"
+win_org_name: "Contoso"
+
+# ---- WinRM ----
+winrm_port: 5985
+
+# ---- Build logging ----
+# Every installer role below appends an /log (MSI) or equivalent argument
+# pointing here when this is true - one place to find every component's
+# install log if a build fails partway through.
+build_log_enabled: true
+build_log_dir: 'C:\ProgramData\Omnissa\Logs'
+
+# ---- Verification toggles ----
+# Added 2026-09-11 so a build can skip specific slow/flaky stages for a
+# quick pipeline-shape verification run, without hand-editing playbook.yml
+# each time - set false here (or pass -e enable_windows_update=false on the
+# packer/ansible command line) instead.
+#
+# enable_windows_update: true by default. Set false to verify the rest of
+# the pipeline (dotnet35 / OSOT Optimize-Generalize-Finalize / store app
+# cleanup / reordering) without sitting through the full looped Windows
+# Update pass - it's slow even when clean, and has a history of getting
+# stuck on KB5122871 (see roles/windows_update's own header). Known
+# consequence of turning it off: rds_role_install may hit the same
+# "Error: 0x800f0922" DISM failure that having Windows Update in the
+# pipeline was specifically added to fix (see that role's own header for
+# the real build failure this traces back to) - so a run with this off is
+# fine for verifying everything UP TO rds_role_install, but don't treat a
+# build made with this off as representative, and re-enable it before
+# actually publishing anything built with it off.
+enable_windows_update: true
+
+# osot_generalize_manual_pause: DISABLED 2026-09-16 per the user's explicit
+# request, following this same toggle pattern rather than deleting the
+# pause's code outright - see roles/osot_generalize/tasks/main.yml's own
+# header for why: unlike osot_optimize's earlier pause (fully removed once
+# it was no longer needed), this one is worth being able to bring back for
+# a future build where a manual look before Generalize is wanted again (a
+# new answer file, an OSOT version bump, anything else worth checking
+# before Generalize commits and exits Audit Mode for good). Set true here
+# (or pass -e osot_generalize_manual_pause=true) to re-enable it.
+osot_generalize_manual_pause: false
+
+# osot_generalize_post_sysprep_pause: DISABLED 2026-09-25 for an unattended
+# test build (post-9/21 AGENT_CUSTOMIZATION_FAULT investigation) - unlike
+# osot_generalize_manual_pause above, this ones role-level default is TRUE,
+# not false, so it has to be explicitly overridden here or every build hangs
+# at the post-Sysprep file-gate for up to an hour waiting on a manual
+# touch /tmp/rdsh_2025_tpl_post_sysprep_pause.go that nobody will run
+# unattended. Remove this override (or set back to true) to bring the
+# safety pause back for a future hands-on debugging session.
+osot_generalize_post_sysprep_pause: false
+
+# ---- Optional extra apps (roles/apps) ----
+# Empty by default - see that role's header comment for the format. Each
+# entry's installer path is an absolute path on the control node's NFS
+# mount (e.g. "/mnt/wdnfs/Ansible/apps/<file>"), not relative to this image
+# directory - same convention rdsh_2025_tpl_agents.yml's installer paths
+# use. No specific app is baked in; add entries here once you have a
+# verified silent-install command line for whatever you want on this image.
+apps_to_install: []

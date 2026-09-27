@@ -221,4 +221,5 @@
     - role: osot_finalize_cleanup # OSOT Finalize pass 1/2 (disk/profile/log cleanup jobs 0-7, waits for SDelete64.exe to finish) - NEW 2026-09-16, MOVED 2026-09-17 to run AFTER App Volumes, see role header
     - role: osot_finalize      # OSOT Finalize pass 2/2 (network/licensing jobs 9-10; job 11 "Release IP" dropped, see role header) - not a numbered user step, but required by both PDFs, see header above - SPLIT 2026-09-16, see role header
     - role: hardening          # RDS licensing mode + Remote Desktop Users group (documentation-only, see role header)
+    - role: collect_build_logs # NEW 2026-09-20 - zip build_log_dir and fetch it to the Ansible control node (gated by collect_build_logs, see role header) - runs LAST, after every other role has had a chance to write into build_log_dir, and before cleanup wipes C:\Temp
     - role: cleanup            # Clear C:\Temp; Packer's shutdown_command (user's step 14) powers off after this

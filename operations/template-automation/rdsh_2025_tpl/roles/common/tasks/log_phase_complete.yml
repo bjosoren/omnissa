@@ -1,0 +1,68 @@
+---
+# roles/common/tasks/log_phase_complete.yml
+#
+# Shared post-phase log line, imported as the LAST task in a role's
+# tasks/main.yml - the mirror image of wait_for_no_pending_reboot.yml,
+# which every role already imports as its FIRST task (see that file's own
+# header). Where that shared task guards against reboot/servicing state
+# left over from an EARLIER phase, this one records that THIS phase itself
+# finished, so a build that fails partway - or one you're just trying to
+# verify ran the way you expect - leaves a single, plain-text trail of
+# which phases actually completed and when, without scrolling back through
+# the full Packer/Ansible console output or opening every role's own
+# separate log file under build_log_dir by hand.
+#
+# ADDED 2026-09-20, per the user's explicit request ("can we create a log
+# ..., so that verifying and troubleshooting is easier"), asked right after
+# using osot_generalize's post-Sysprep pause to manually inspect
+# setupact.log/setuperr.log on the console for one specific phase. That
+# was useful but manual and single-purpose; this gives every phase the
+# same kind of at-a-glance record automatically, with no console/RDP
+# session needed just to see how far a build got and roughly how long
+# each phase took.
+#
+# LOCATION: writes to build_log_dir (C:\ProgramData\Omnissa\Logs per
+# inventory/group_vars/rdsh_2025_tpl.yml), NOT C:\Temp - matching
+# roles/base's own "one place to find every component's log" convention
+# that osot_optimize's own log-copy task already follows (see that role's
+# header). This also survives the final `cleanup` role, which wipes
+# C:\Temp but not build_log_dir - a file left under C:\Temp would be gone
+# by the time you went looking for it after a successful build, which
+# would defeat half the point. If C:\Temp specifically was what you meant,
+# swap the path below - flagging the choice here rather than guessing
+# silently. Gated by the same build_log_enabled flag every other
+# build_log_dir write already respects, and assumes build_log_dir already
+# exists by the time this runs - true for every role after roles/base,
+# which is every role this gets imported into.
+#
+# ONE shared, appended-to file (build_phase_log.txt) rather than one file
+# per phase, so it reads top-to-bottom as this build's own timeline across
+# every role, in arrival order - not scattered across a dozen small files
+# you'd have to sort by timestamp yourself.
+#
+# role_name/role_status/role_detail are all optional, passed in via `vars:`
+# on the import_tasks call when a role wants to say more than "this role
+# finished" - role_name defaults to ansible_role_name (Ansible's own magic
+# var for "the role currently running"), so the plain one-line import below
+# needs no vars at all for a role with nothing unusual to report:
+#
+#   - name: Log phase completion
+#     ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/log_phase_complete.yml"
+#
+# role_detail is how a role that runs more than once in the same play
+# (osot_optimize, pass 1 and pass 2) tells the two entries apart - e.g.
+# `vars: { role_detail: "{{ osot_optimize_pass_label | default('') }}" }`.
+#
+# ignore_errors: true - this is a diagnostic convenience, not a build-
+# success criterion, same reasoning as osot_optimize's own log-copy task:
+# a logging hiccup should never be what fails an otherwise-good build.
+- name: "Append phase-complete line to build_phase_log.txt ({{ role_name | default(ansible_role_name | default('unknown role')) }})"
+  ansible.windows.win_shell: |
+    $line = "{0} | {1,-22} | {2}{3}" -f `
+      (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), `
+      "{{ role_name | default(ansible_role_name | default('unknown role')) }}", `
+      "{{ role_status | default('OK') }}", `
+      "{{ (' - ' + role_detail) if (role_detail | default('')) | length > 0 else '' }}"
+    Add-Content -Path "{{ build_log_dir }}\build_phase_log.txt" -Value $line
+  when: build_log_enabled | default(true) | bool
+  ignore_errors: true

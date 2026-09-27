@@ -108,9 +108,9 @@
 # directly, no redacted-report workaround needed for them.
 #
 # kinit needs the realm UPPER-cased, not whatever case domain_fqdn happens to
-# be stored in - confirmed live: `kinit user@example.com` (lowercase)
+# be stored in - confirmed live: `kinit user@ad.admin.frelab.net` (lowercase)
 # hit this same file's documented "KDC reply did not match expectations" bug,
-# while `kinit user@EXAMPLE.COM` (uppercase) succeeded cleanly. Same
+# while `kinit user@AD.ADMIN.FRELAB.NET` (uppercase) succeeded cleanly. Same
 # reasoning as smb.conf's `realm = {{ domain_fqdn | upper }}` above.
 #
 # KRB5CCNAME points this ticket at its own scoped cache file rather than
@@ -162,7 +162,7 @@
   # over ~76 columns onto a continuation line (a single leading space, per
   # RFC 2849) - confirmed live: this domain's real OU depth ("CN=<host>,
   # OU=HZUBTP1,OU=Computers,OU=Horizon,OU=Virtual,OU=EUC,DC=ad,DC=admin,
-  # DC=example,DC=com") is long enough to wrap, silently truncating the dn:
+  # DC=frelab,DC=net") is long enough to wrap, silently truncating the dn:
   # value the delete task below extracts to just its first physical line
   # ("...OU=EUC,DC=ad", missing everything after) - ldapdelete then fails on
   # that truncated DN with an LDAP referral, not an obviously-DN-related

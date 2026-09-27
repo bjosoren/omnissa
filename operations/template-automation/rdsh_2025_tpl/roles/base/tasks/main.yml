@@ -1,5 +1,7 @@
 ---
 # roles/base/tasks/main.yml
+- name: Confirm no pending reboot before this phase
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/wait_for_no_pending_reboot.yml"
 # Prep work every later role depends on - adapted from the "Prep" section
 # repeated at the top of every rdsh_0X_*.yml stage in the source guide
 # (Create temp directory / Create log directory), consolidated into one

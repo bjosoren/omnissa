@@ -1,0 +1,80 @@
+---
+# roles/common/tasks/pause_for_log_verification.yml
+#
+# Shared, OPT-IN, per-phase pause for manually confirming a role's own log
+# actually landed in build_log_dir - imported by a role right after its own
+# log-copy task(s) (e.g. osot_optimize's "Copy OSOT's own Optimize log into
+# build_log_dir"), NOT at the end of the role like log_phase_complete.yml
+# (which always runs, unconditionally) - this one sits specifically right
+# after a log gets written, before the role moves on to whatever's next (a
+# reboot, in most of the roles that use it), so what's on the console when
+# you look is that exact still-fresh state, not several tasks' worth of
+# drift later.
+#
+# ADDED 2026-09-21, per the user's explicit request ("can you add a pause to
+# the different phases so that I can log into console and verify if the
+# logs are indeed collected"), made right after confirming - via a real
+# VM's own console (screenshots of C:\ProgramData\Omnissa\Omnissa OS
+# Optimization Tool\Log) - that the OSOT log filename guesses in
+# osot_generalize/osot_finalize_cleanup's own copy tasks (Generalize_*.log,
+# Finalize_*.log) were exactly right. Those screenshots were from a build
+# that predates those two copy tasks though, so this gives a repeatable way
+# to confirm the COPIED files (osot_generalize_report.log,
+# osot_finalize_cleanup_report.log, etc. under build_log_dir itself, not
+# OSOT's own source logs under its own folder) show up correctly on the
+# next real build.
+#
+# Same file-gate construct as every other pause in this pipeline (pure
+# controller-side lookup() + pause, released via touch from a SEPARATE
+# shell on ubt-ans-wrkr-02 - see osot_generalize's own pauses for the
+# fuller explanation of why this specific construct is used - immune to
+# the ansible_shell_type=cmd extra-var problem that broke earlier attempts
+# at a plain-module pause). Marker file is named after ansible_role_name
+# (Ansible's own "role currently running" magic var), so each role that
+# imports this gets its OWN independently-releasable pause point rather
+# than one shared marker that would force stepping through every paused
+# phase in lockstep even if you only care about one. osot_optimize runs
+# twice under the same role name (pass 1/pass 2) - safe regardless, since
+# the "clear stale marker" task below re-clears it fresh on each import.
+#
+# Defaults to DISABLED (verify_phase_logs_pause: false) - unlike
+# collect_build_logs (cheap, harmless, left on by default), pausing at
+# every phase adds real wall-clock time to a build if left on, so this is
+# deliberately opt-in per run rather than a standing default. Set
+# verify_phase_logs_pause: true (e.g. in rdsh_2025_tpl.local.yml, or as a
+# one-off -e on an ad-hoc build) when you actually want to walk through and
+# check logs phase by phase; leave it unset/false for a normal build.
+#
+# NOT YET wired into every role that writes a log - only the ones whose
+# tasks/main.yml I actually have (osot_optimize x2, osot_finalize_cleanup;
+# osot_generalize already has its own bespoke, more detailed pauses that
+# cover this exact need, so it wasn't touched). horizon_agent/dem/
+# appvolumes/windows_update/dotnet35 already appear to write their own
+# logs into build_log_dir (confirmed via your own screenshot of
+# horizon_agent_install.log/dem_install.log/appvolumes_install.log
+# already sitting there) but I don't have those roles' files to add the
+# import to - send them over and this same one line goes at the end of
+# each: `ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/pause_for_log_verification.yml"`
+- name: "PAUSE (file-gate) - clear any stale continue-marker before waiting for {{ ansible_role_name }}'s log-verification review"
+  ansible.builtin.debug:
+    msg: "{{ lookup('ansible.builtin.pipe', 'rm -f /tmp/rdsh_2025_tpl_verify_log_' + ansible_role_name + '.go; echo marker-cleared') }}"
+  when: verify_phase_logs_pause | default(false) | bool
+
+- name: "Show how to verify {{ ansible_role_name }}'s log in build_log_dir"
+  ansible.builtin.debug:
+    msg:
+      - "{{ ansible_role_name }} has just written its log into build_log_dir ({{ build_log_dir }})."
+      - "Open this VM's console in vCenter (or RDP) and confirm it's there, e.g.:"
+      - "    Get-ChildItem '{{ build_log_dir }}' | Sort-Object LastWriteTime -Descending | Select-Object -First 10"
+      - ""
+      - "When ready to continue: from a SEPARATE shell on ubt-ans-wrkr-02 (a second SSH session - this terminal is busy running packer build) run:"
+      - "    touch /tmp/rdsh_2025_tpl_verify_log_{{ ansible_role_name }}.go"
+  when: verify_phase_logs_pause | default(false) | bool
+
+- name: "PAUSE (file-gate) - wait for {{ ansible_role_name }}'s log-verification review to finish"
+  ansible.builtin.pause:
+    seconds: 15
+  until: (lookup('ansible.builtin.fileglob', '/tmp/rdsh_2025_tpl_verify_log_' + ansible_role_name + '.go') | default([], true) | length) > 0
+  retries: 240
+  delay: 0
+  when: verify_phase_logs_pause | default(false) | bool

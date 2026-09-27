@@ -124,7 +124,7 @@ variable "guest_ip_cidr" {
   # guest already comes up on DHCP regardless of what this holds. Left
   # optional/unused on purpose for a DHCP-only setup; only fill this (and
   # add an actual static-IP task) if you later want a reserved address
-  # instead. e.g. "192.0.2.60/24"
+  # instead. e.g. "10.10.20.60/24"
 }
 variable "guest_gateway" {
   type    = string

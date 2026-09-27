@@ -88,6 +88,23 @@ packer {
   }
 }
 
+# ADDED 2026-09-20, per the user's explicit request to be able to opt in/out
+# of collecting install logs at the start of a build. Declared HERE rather
+# than in this image's own variables.pkr.hcl - all .pkr.hcl files in a
+# directory are parsed together by Packer regardless of which one declares
+# a variable, so this is functionally identical to putting it there, but
+# doing it here means this whole feature (this file's variable block +
+# extra_arguments line, scripts/build.sh's prompt, and
+# roles/collect_build_logs) can be reviewed as one unit without needing
+# variables.pkr.hcl open at the same time. Move it into variables.pkr.hcl
+# later if you'd rather keep every variable declared in one place - no
+# functional difference either way.
+variable "collect_build_logs" {
+  type        = bool
+  default     = true
+  description = "Zip build_log_dir (C:\\ProgramData\\Omnissa\\Logs) at the end of the build and fetch it to this control node - see roles/collect_build_logs. scripts/build.sh sets this from an interactive prompt at the start of the build; override with PKR_VAR_collect_build_logs=false to skip the prompt and always decline."
+}
+
 locals {
   # Rendered once and reused for floppy_content, so it can't drift from what
   # actually gets fed to Windows setup - same reasoning as ubt_2404_tpl's
@@ -341,6 +358,13 @@ build {
         # an extra encryption layer on top of a transport that was already
         # deliberately left unencrypted.
         "-e", "ansible_winrm_message_encryption=never",
+        # ADDED 2026-09-20 - threads scripts/build.sh's start-of-build
+        # "collect install logs?" prompt (exported as PKR_VAR_collect_build_logs,
+        # see that script's own comment) through to roles/collect_build_logs'
+        # own collect_build_logs var. ${var.collect_build_logs} interpolates
+        # to the literal string "true"/"false", which that role's
+        # `| bool` filter reads correctly either way.
+        "-e", "collect_build_logs=${var.collect_build_logs}",
       ]
     )
   }

@@ -1,63 +1,28 @@
----
 # roles/windows_update/tasks/round.yml
 # One round of "search for updates, install what's found, reboot if
-# needed" - included in a bounded loop by main.yml (see that file's
-# header comment for why this whole role exists, why it's bounded, and
-# why this uses ansible.windows.win_updates rather than a hand-rolled
-# Microsoft.Update.Session COM script - the short version: the COM API's
-# Download()/Install() steps return E_ACCESSDENIED (0x80070005) under a
-# WinRM network-logon session, confirmed by a real build failure, and
-# win_updates is Ansible's own answer to that exact restriction). Sets
+# needed" - included in a bounded loop by main.yml. Sets
 # windows_update_clear so main.yml's loop can stop early once a round
 # finds nothing left to do.
 #
 # become: runas/SYSTEM matches win_updates' own documented fallback for
 # when its default Task Scheduler background-process mechanism isn't
-# available - cheap insurance here since SYSTEM needs no password to
-# become via the runas plugin, and it's exactly the same network-logon
-# problem this whole role change exists to get around.
-#
-# No async/poll here (unlike the old COM-script version) - win_updates
-# already runs the actual search/download/install as a background
-# process via Task Scheduler internally (that's what the become also
-# backstops), so it isn't a single long-blocking foreground WinRM call
-# the way the raw COM script was.
+# available - SYSTEM needs no password to become via the runas plugin.
 #
 # category_names deliberately matches win_updates' own documented default
-# (CriticalUpdates/SecurityUpdates/UpdateRollups) rather than the broader
-# list this used to carry (which also had "Updates" and "DefinitionUpdates"
-# added on top of that default). A real build with the broader list looped
-# all 6 rounds reporting the identical "found=2 installed=2
-# reboot_required=True" every single round and never settled -
-# ansible-collections/ansible.windows issue #530 documents exactly this as
-# a known win_updates loop trigger: KB2267602, a Windows Defender antivirus
-# *definition* update, which Microsoft republishes multiple times a day -
-# not a one-time "settled" state at all, and not relevant to what this role
-# actually needs (a complete-enough component store for rds_role_install's
-# DISM feature install; see that role's own header for the 0x800f0922
-# story this whole role exists to prevent). Narrowing category_names back
-# to the module's own default removes DefinitionUpdates structurally;
-# reject_list below is belt-and-suspenders in case a definition update ever
-# surfaces under one of the three categories still in use.
+# (CriticalUpdates/SecurityUpdates/UpdateRollups) rather than a broader
+# list that also includes DefinitionUpdates: Windows Defender antivirus
+# *definition* updates (e.g. KB2267602) are republished multiple times a
+# day, so including that category can make this loop see "new updates"
+# every round and never settle. reject_list below is belt-and-suspenders
+# in case a definition update ever surfaces under one of the three
+# categories still in use.
 #
 # reboot: true (rather than a separate win_reboot task after this one) -
-# a real build with the separate-win_reboot version got past the
-# KB2267602 loop but then hit a different one: the exact same real
-# security update (KB5122871, 2026-09) reported found=1/installed=1/
-# reboot_required=True identically for rounds 4 through 6 straight,
-# never settling despite a win_reboot + 90s post_reboot_delay in between
-# every round. Checked KB5122871's own Microsoft support page directly -
-# no documented install-loop/known issue for that update itself, so this
-# isn't a broken update. The far more likely explanation: WinRM can
-# reconnect (satisfying win_reboot) while CBS/TrustedInstaller is still
-# finalizing a large cumulative update in the background, so the next
-# round's search can genuinely still see it as not-yet-committed and
-# re-offer it - a timing race between an EXTERNAL reboot task and this
-# module's own internal completion bookkeeping, not something a bigger
-# guessed post_reboot_delay reliably fixes. win_updates' own reboot: true
-# is Ansible's documented answer to exactly this: it reboots and resumes
-# internally as one coordinated operation instead of two separately-timed
-# tasks, so no separate win_reboot task follows this one anymore.
+# win_updates reboots and resumes internally as one coordinated
+# operation. A separate win_reboot task risks a race where WinRM
+# reconnects while CBS/TrustedInstaller is still finalizing a large
+# update in the background, so the next round's search can still see it
+# as not-yet-committed and re-offer it.
 - name: "Search for, install, and reboot for Windows updates ({{ item }})"
   ansible.windows.win_updates:
     category_names:
@@ -82,6 +47,42 @@
       reboot_required={{ wu_round.reboot_required }}
       titles={{ (wu_round.updates | default({})).values()
                  | map(attribute='title') | list }}
+
+# Appends an audit entry (KB numbers, titles, installed status) to
+# windows_update_report.log under build_log_dir, so a build's actual
+# installed-update history survives after the build finishes. Only runs
+# when this round actually installed something - a round that found
+# nothing is noise, not audit info.
+#
+# wu_round.updates' free-text titles go through a to_json / ConvertFrom-Json
+# round-trip rather than straight Jinja string interpolation into the
+# PowerShell here-string, since a title containing a quote or backtick
+# could otherwise break the embedded script. Everything else interpolated
+# directly (round number, counts, booleans) has nothing to escape.
+#
+# ignore_errors: true - a logging hiccup here should never fail an
+# otherwise-good Windows Update round.
+- name: "Append this round's installed updates to windows_update_report.log ({{ item }})"
+  ansible.windows.win_shell: |
+    $updatesJson = @'
+    {{ ((wu_round.updates | default({})).values() | list) | to_json }}
+    '@
+    $updates = $updatesJson | ConvertFrom-Json
+    $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $lines = @()
+    $lines += "=== Round {{ item }}/6 - $stamp ==="
+    $lines += "Found: {{ wu_round.found_update_count | default(0) }}  Installed: {{ wu_round.installed_update_count | default(0) }}  RebootRequired: {{ wu_round.reboot_required | default(false) }}"
+    foreach ($u in $updates) {
+      $kb = if ($u.kb) { ($u.kb -join ',') } else { 'n/a' }
+      $state = if ($u.installed) { 'installed' } else { 'not installed' }
+      $lines += "  - KB$($kb): $($u.title) ($state)"
+    }
+    $lines += ""
+    Add-Content -Path "{{ build_log_dir }}\windows_update_report.log" -Value $lines
+  when:
+    - build_log_enabled | default(true) | bool
+    - (wu_round.installed_update_count | default(0) | int) > 0
+  ignore_errors: true
 
 - name: "Mark this round clear if nothing was found/installed and nothing is pending ({{ item }})"
   ansible.builtin.set_fact:

@@ -35,7 +35,7 @@
     state: absent
 
 # Real evidence this is needed: hz-ubt-r-01, a live Horizon-spawned VDI,
-# showing IP 198.51.100.150 in vCenter's own guest summary - the pinned
+# showing IP 172.16.12.150 in vCenter's own guest summary - the pinned
 # guest_ip_cidr address group_vars reserves for the BUILD VM, not
 # something DHCP assigned it. That's because http/user-data.pkrtpl.hcl's
 # autoinstall network: section writes a static netplan config (dhcp4:
@@ -106,7 +106,7 @@
 # real VDIs from two different pools (hz-ubt-02, MAC ...ec:6b, and
 # hz-ubt-r-01, MAC ...22:7d - confirmed genuinely different in vCenter's
 # own Edit Settings) both landing on the exact same DHCP-leased address,
-# 198.51.100.145, while both powered on at once. Not a MAC problem (that's
+# 172.16.12.145, while both powered on at once. Not a MAC problem (that's
 # long since fixed and confirmed working here) and not a netplan-not-being-
 # applied problem either - it's that systemd-networkd's DHCPv4 client does
 # NOT identify itself to the server by MAC by default; with no

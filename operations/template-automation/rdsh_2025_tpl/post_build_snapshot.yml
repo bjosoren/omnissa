@@ -1,50 +1,43 @@
 ---
 # post_build_snapshot.yml
-# Identical in every functional respect to images/ubt_2404_tpl/post_build_snapshot.yml -
-# vCenter-API-only (clone, NIC fixup, snapshot), no guest OS awareness, so
-# the same two-VM split and the same reasoning for it applies unchanged. See
-# that file's header comment for the full story of why vm_name gets cloned
-# to published_vm_name rather than snapshotted directly (a pinned MAC/IP
-# colliding between a Horizon-locked published VM and the next build's own
-# guest), and why the NIC-to-Automatic fix has to be a raw pyVmomi
-# reconfigure rather than a delete/recreate via vmware_guest_network.
+# vCenter-API-only (no guest OS awareness): flips vm_name's NIC to an
+# auto-generated MAC, clones vm_name to published_vm_name, then snapshots
+# the clone - this snapshot is what Horizon forks instant clones from.
 #
-# set_nic_automatic.py is NOT reproduced here - copy it byte-for-byte from
-# images/ubt_2404_tpl/set_nic_automatic.py into this directory unchanged.
-# It's pure vCenter API code (no guest OS awareness whatsoever), so there is
-# nothing Windows-specific to adapt; duplicating it untouched is correct.
+# The build VM (vm_name) is never snapshotted directly - it's cloned to a
+# separate, uniquely-named published VM first, so a Horizon-locked
+# published VM never shares a MAC/IP with the next build's own guest.
+
 - name: Clone the build VM, then snapshot the clone for Horizon
   hosts: localhost
   connection: local
   gather_facts: false
   tasks:
-    - name: Clone {{ vm_name }} to the published VM {{ published_vm_name }}
-      community.vmware.vmware_guest:
-        hostname: "{{ vcenter_server }}"
-        username: "{{ vcenter_username }}"
-        password: "{{ vcenter_password }}"
-        validate_certs: false
-        datacenter: "{{ vcenter_datacenter }}"
-        cluster: "{{ vcenter_cluster }}"
-        datastore: "{{ vcenter_datastore }}"
-        folder: "/{{ vcenter_datacenter }}/vm/{{ vcenter_folder }}"
-        name: "{{ published_vm_name }}"
-        template: "{{ vm_name }}"
-        is_template: false
-        linked_clone: false
-        networks:
-          - name: "{{ vcenter_network }}"
-        state: poweredoff
-        wait_for_ip_address: false
-    - name: Flip the published clone's inherited NIC to Automatic MAC
+    - name: Flip {{ vm_name }}'s own NIC to Automatic MAC so it can never collide with the published clone or expose its old pinned identity
       ansible.builtin.script: "{{ playbook_dir }}/set_nic_automatic.py"
       environment:
         VC_HOST: "{{ vcenter_server }}"
         VC_USER: "{{ vcenter_username }}"
         VC_PASSWORD: "{{ vcenter_password }}"
-        VC_VM_NAME: "{{ published_vm_name }}"
-      register: nic_fix
-      changed_when: "'After reconfigure' in nic_fix.stdout"
+        VC_VM_NAME: "{{ vm_name }}"
+      register: nic_fix_template
+      changed_when: "'After reconfigure' in nic_fix_template.stdout"
+
+    - name: Clone {{ vm_name }} to the published VM {{ published_vm_name }} (raw pyVmomi, no network/customization spec)
+      ansible.builtin.script: "{{ playbook_dir }}/clone_for_publish.py"
+      environment:
+        VC_HOST: "{{ vcenter_server }}"
+        VC_USER: "{{ vcenter_username }}"
+        VC_PASSWORD: "{{ vcenter_password }}"
+        VC_SOURCE_VM: "{{ vm_name }}"
+        VC_TARGET_VM: "{{ published_vm_name }}"
+        VC_DATACENTER: "{{ vcenter_datacenter }}"
+        VC_CLUSTER: "{{ vcenter_cluster }}"
+        VC_DATASTORE: "{{ vcenter_datastore }}"
+        VC_FOLDER_PATH: "{{ vcenter_folder }}"
+      register: clone_for_publish
+      changed_when: true # always creates a brand new VM; no idempotency to check
+
     - name: Create the instant-clone snapshot on the published clone
       community.vmware.vmware_guest_snapshot:
         hostname: "{{ vcenter_server }}"

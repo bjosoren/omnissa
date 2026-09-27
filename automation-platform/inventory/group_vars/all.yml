@@ -1,0 +1,7 @@
+vcenter_server: vc-01.ad.admin.frelab.net
+vcenter_username: "{{ vault_vcenter_username }}"
+vcenter_password: "{{ vault_vcenter_password }}"
+vcenter_datacenter: Datacenter
+domain_fqdn: ad.admin.frelab.net
+domain_realm: AD.ADMIN.FRELAB.NET
+ssh_private_key_file: ~/.ssh/golden_image_ed25519

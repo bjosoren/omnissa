@@ -1,0 +1,78 @@
+---
+# roles/collect_build_logs/tasks/main.yml
+#
+# NEW ROLE, ADDED 2026-09-20, per the user's explicit request: zip up every
+# per-component install log this pipeline collects into build_log_dir
+# (C:\ProgramData\Omnissa\Logs - see roles/common/tasks/log_phase_complete.yml
+# and each individual role's own log-copy tasks, e.g. osot_optimize's "Copy
+# OSOT's own Optimize log into build_log_dir") and pull that single zip back
+# to the Ansible control node, so a failed or just-questionable build can be
+# debugged from one downloaded archive instead of consoling/RDPing into a VM
+# that - per playbook.yml's own `cleanup` role, which runs right after this
+# one - is about to have C:\Temp wiped and then be shut down for cloning.
+#
+# Gated by collect_build_logs (default true). scripts/build.sh now asks
+# "Collect install logs for download at the end of this build? [Y/n]" right
+# at the start of the build (before packer init/validate/build even runs),
+# and threads the answer through as PKR_VAR_collect_build_logs ->
+# rdsh_2025_tpl.pkr.hcl's own `variable "collect_build_logs"` -> the ansible
+# provisioner's extra_arguments (-e collect_build_logs=...) -> this var.
+# Declining skips both tasks below entirely - no zip, no fetch, no added
+# build time.
+#
+# Positioned last in playbook.yml, right before `cleanup` - after every
+# other role has had its chance to write into build_log_dir, and before
+# cleanup/Packer's own shutdown_command run.
+#
+# Zip written to build_log_dir's PARENT directory (C:\ProgramData\Omnissa\),
+# not inside build_log_dir itself - zipping a directory into a file that
+# then also lives inside that same directory risks Compress-Archive trying
+# to include the zip it's still writing.
+- name: Zip build_log_dir into a single archive for download
+  ansible.windows.win_shell: |
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $zipPath = "{{ build_log_dir }}\..\build_logs_$stamp.zip"
+    Compress-Archive -Path "{{ build_log_dir }}\*" -DestinationPath $zipPath -Force
+    Write-Output (Resolve-Path $zipPath).Path
+  register: collect_build_logs_zip
+  when: collect_build_logs | default(true) | bool
+  ignore_errors: true
+
+# collect_build_logs_dest_dir: NOT verified against this repo's real
+# directory layout (I only have scripts/build.sh and this image's own
+# .pkr.hcl, not the top-level project structure) - defaults to a
+# build_logs/ folder created next to this playbook (playbook_dir is
+# Ansible's own magic var for "the directory playbook.yml lives in", so
+# this needs no new plumbing to resolve). scripts/build.sh's own transcript
+# convention keeps per-image logs under images/<key>/logs/ instead - if
+# you'd rather this land there, override collect_build_logs_dest_dir in
+# group_vars/rdsh_2025_tpl.local.yml.
+#
+# flat: true - writes directly to collect_build_logs_dest_dir instead of
+# fetch's own default dest/<hostname>/<path> nesting, so there's one
+# obvious zip per run rather than a directory tree to dig through.
+- name: Fetch build logs archive to the Ansible control node
+  ansible.builtin.fetch:
+    src: "{{ collect_build_logs_zip.stdout | trim }}"
+    dest: "{{ collect_build_logs_dest_dir | default(playbook_dir ~ '/build_logs/') }}"
+    flat: true
+  when: >-
+    (collect_build_logs | default(true) | bool)
+    and (collect_build_logs_zip.stdout | default('') | trim | length) > 0
+
+- name: Show where the build logs archive landed
+  ansible.builtin.debug:
+    msg: "Build logs archive fetched to {{ collect_build_logs_dest_dir | default(playbook_dir ~ '/build_logs/') }} on the Ansible control node."
+  when: >-
+    (collect_build_logs | default(true) | bool)
+    and (collect_build_logs_zip.stdout | default('') | trim | length) > 0
+
+- name: Note that log collection was skipped
+  ansible.builtin.debug:
+    msg: "collect_build_logs is false (declined at scripts/build.sh's start-of-build prompt, or set false in group_vars) - skipped zipping/fetching build_log_dir."
+  when: not (collect_build_logs | default(true) | bool)
+
+# ADDED 2026-09-20 - same shared phase-log entry every other role gets (see
+# roles/common/tasks/log_phase_complete.yml's own header).
+- name: Log phase completion
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/log_phase_complete.yml"

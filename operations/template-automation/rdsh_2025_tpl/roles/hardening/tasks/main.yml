@@ -57,3 +57,10 @@
       RDSH hosts into instead - same approach already used for RD licensing
       mode. RDSH session logins will fail until that GPO exists, targets
       the correct AD group, and has applied.
+
+# ADDED 2026-09-20 - see roles/common/tasks/log_phase_complete.yml's own
+# header for the full rationale (one running build_phase_log.txt entry per
+# role, imported as every role's LAST task, the mirror of
+# wait_for_no_pending_reboot.yml imported as every role's FIRST task).
+- name: Log phase completion
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/log_phase_complete.yml"
