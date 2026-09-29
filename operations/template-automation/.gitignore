@@ -1,0 +1,5 @@
+logs/
+build_logs/
+*.log
+*.local.yml
+.packer_vars.json

@@ -103,7 +103,7 @@ horizon_agent_tarball: "/mnt/wdnfs/Ansible/horizon/Omnissa-horizonagent-linux-x8
 
 
 # ---- NFS home directories ----
-nfs_server: ubt-fil-02.example.com
+nfs_server: nfs01.example.com
 nfs_export_path: /srv/home/hzubtp1
 
 # ---- Horizon pool publish (scripts/publish_to_pool.sh) ----
