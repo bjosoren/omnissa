@@ -1,0 +1,15 @@
+# w11_24h2_tpl - Omnissa OS Optimization Tool (run via its command line).
+# Installer paths are on the control node's NFS mount; real names go in
+# w11_24h2_tpl.local.yml.
+
+osot_installer: "/mnt/wdnfs/Ansible/osot/CHANGEME-osot-installer.exe"
+osot_finalize_sdelete64_installer: "/mnt/wdnfs/Ansible/osot/CHANGEME-sdelete64-installer.exe"  # sdelete64.exe, for Finalize job 7
+
+# Not passed to OSOT (-t) - the default template is used; kept for reference.
+osot_template: "Omnissa\\Windows 10, 11 and Server 2022, 2025"
+
+# Finalize job numbers, two passes (see OSOT's command-line docs):
+osot_finalize_cleanup_job_numbers: "0 1 2 3 4 5 6 7"   # after App Volumes: cleanup, SDelete
+osot_finalize_job_numbers: "9 10"                      # last: clear KMS, flush DNS
+# Job 8 (local group policies, needs LGPO.exe) is not used. Job 11 (release
+# IP) is left out: it drops WinRM, which Packer still needs for shutdown.

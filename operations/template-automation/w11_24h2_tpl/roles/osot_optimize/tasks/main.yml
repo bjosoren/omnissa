@@ -1,0 +1,119 @@
+---
+# OSOT Optimize via its command line (the GUI hangs under WinRM - no
+# interactive desktop). Started detached, then OSOT's own log is polled for
+# completion (max 1 hour). Runs twice: before and after Generalize.
+- name: Copy OSOT to VM
+  ansible.windows.win_copy:
+    src: "{{ osot_installer }}"
+    dest: "C:\\Temp\\{{ osot_installer | basename }}"
+
+- name: Deliver OSOT Optimize script to C:\Temp
+  ansible.windows.win_template:
+    src: run_osot_optimize.ps1.j2
+    dest: "C:\\Temp\\run_osot_optimize.ps1"
+
+- name: Start OSOT Optimize pass (async)
+  ansible.windows.win_shell: |
+    powershell.exe -ExecutionPolicy Bypass -File C:\Temp\run_osot_optimize.ps1
+  async: 3600
+  poll: 0
+  register: osot_optimize_start
+
+- name: Wait for OSOT Optimize log to report completion
+  ansible.windows.win_shell: |
+    $log = Get-ChildItem -Path "C:\ProgramData\Omnissa\Omnissa OS Optimization Tool\Log" -Filter "Optimize_*.log" -ErrorAction SilentlyContinue |
+      Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if (-not $log) {
+      Write-Output "PENDING (no log yet)"
+      exit 0
+    }
+    $content = Get-Content -Path $log.FullName -Raw -ErrorAction SilentlyContinue
+    if ($content -notmatch 'htmlReport:') {
+      Write-Output "PENDING"
+      exit 0
+    }
+    $statusCode = "NONE"
+    if ($content -match 'Status of Request for optimization is (\d+):') {
+      $statusCode = $matches[1]
+    }
+    Write-Output "DONE:$statusCode"
+  register: osot_optimize_poll
+  until: "'DONE:' in (osot_optimize_poll.stdout | default(''))"
+  retries: 240
+  delay: 15
+  ignore_errors: true
+
+- name: Determine OSOT Optimize's own reported status code
+  ansible.builtin.set_fact:
+    osot_optimize_status: "{{ osot_optimize_poll.stdout | default('') | regex_replace('.*DONE:([0-9A-Za-z]+).*', '\\1') }}"
+  when: "'DONE:' in (osot_optimize_poll.stdout | default(''))"
+
+- name: Ensure the OSOT process is no longer running
+  ansible.windows.win_shell: |
+    $Optimizer = "C:\Temp\{{ osot_installer | basename }}"
+    $procs = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $Optimizer }
+    if ($procs) {
+      $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+      Write-Output "Stopped $($procs.Count) lingering osot.exe process(es)"
+    } else {
+      Write-Output "No lingering osot.exe process found"
+    }
+  register: osot_optimize_cleanup
+  ignore_errors: true
+
+- name: Show OSOT Optimize output
+  ansible.builtin.debug:
+    msg:
+      - "OSOT Optimize {{ osot_optimize_pass_label | default('') }}"
+      - "Launch dispatched: {{ osot_optimize_start.started | default(false) }} (job {{ osot_optimize_start.ansible_job_id | default('?') }})"
+      - "Completion poll (last): {{ osot_optimize_poll.stdout | default('(no output)') }}"
+      - "Reported status code: {{ osot_optimize_status | default('(not reached)') }}"
+      - "Process cleanup: {{ osot_optimize_cleanup.stdout | default('(no output)') }}"
+
+- name: Copy OSOT's own Optimize log into build_log_dir
+  ansible.windows.win_shell: |
+    $src = Get-ChildItem -Path "C:\ProgramData\Omnissa\Omnissa OS Optimization Tool\Log" -Filter "Optimize_*.log" -ErrorAction SilentlyContinue |
+      Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($src) {
+      Copy-Item -Path $src.FullName -Destination "{{ build_log_dir }}\{{ osot_optimize_report_name | default('osot_optimize_report.log') }}" -Force
+      Write-Host "Copied $($src.FullName) to {{ build_log_dir }}\{{ osot_optimize_report_name | default('osot_optimize_report.log') }}"
+    } else {
+      Write-Host "No Optimize_*.log found under OSOT's own log folder - nothing to copy."
+    }
+  when: build_log_enabled | default(true) | bool
+  ignore_errors: true
+
+- name: Pause for log verification
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/pause_for_log_verification.yml"
+
+- name: Fail if OSOT Optimize log never reported completion within the 1-hour polling window
+  ansible.builtin.fail:
+    msg: >-
+      OSOT Optimize's own Optimize_*.log never reached its htmlReport:
+      completion line within 3600s of polling. Console/WinRM into the VM
+      and check Task Manager for osot.exe still running, or the newest
+      Optimize_*.log directly under C:\ProgramData\Omnissa\Omnissa OS
+      Optimization Tool\Log, before re-running - this is a polling-window
+      ceiling being hit, not necessarily proof the pass itself failed.
+  when: "'DONE:' not in (osot_optimize_poll.stdout | default(''))"
+
+- name: Fail if OSOT Optimize pass exited with a non-zero, non-reboot-required code
+  ansible.builtin.fail:
+    msg: >-
+      OSOT Optimize's own log reported status "{{ osot_optimize_status | default('NONE') }}"
+      instead of 0 or 3010 - see 'Show OSOT Optimize output' above and the
+      copied log in build_log_dir.
+  when: >-
+    'DONE:' in (osot_optimize_poll.stdout | default(''))
+    and (osot_optimize_status | default('NONE') | int(-1)) not in [0, 3010]
+
+- name: Reboot after OSOT Optimize
+  ansible.windows.win_reboot:
+    reboot_timeout: 600
+    post_reboot_delay: 30
+    msg: "Rebooting after OSOT Optimize {{ osot_optimize_pass_label | default('pass') }}"
+
+- name: Log phase completion
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/log_phase_complete.yml"
+  vars:
+    role_detail: "{{ osot_optimize_pass_label | default('') }} status={{ osot_optimize_status | default('NONE') }}"

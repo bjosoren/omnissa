@@ -1,0 +1,28 @@
+- name: Confirm no pending reboot before this phase
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/wait_for_no_pending_reboot.yml"
+
+- name: "Windows Update round"
+  ansible.builtin.include_tasks: round.yml
+  loop: "{{ range(1, 7) | list }}"
+  loop_control:
+    loop_var: item
+    label: "{{ item }}/6"
+  when: windows_update_clear is not defined or not windows_update_clear
+
+- name: Fail if Windows Update still isn't clear after 6 rounds
+  ansible.builtin.fail:
+    msg: >-
+      Windows Update still has updates pending and/or a reboot pending
+      after 6 rounds - something is genuinely stuck rather than just
+      multi-wave updates settling (check VLAN 12 internet/WSUS reachability
+      from this VM specifically, and Windows Update's own error history via
+      Get-WindowsUpdateLog or Settings > Windows Update > Update history).
+      Console/WinRM into the VM and check manually before re-running.
+  when: windows_update_clear is not defined or not windows_update_clear
+
+- name: Show Windows Update settle result
+  ansible.builtin.debug:
+    msg: "Windows Update is fully settled - no updates pending, no reboot pending."
+
+- name: Log phase completion
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/log_phase_complete.yml"

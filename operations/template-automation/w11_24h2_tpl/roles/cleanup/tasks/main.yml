@@ -1,0 +1,12 @@
+---
+# Last role: clear C:\Temp. Packer's shutdown_command powers the VM off.
+- name: Confirm no pending reboot before this phase
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/wait_for_no_pending_reboot.yml"
+- name: Remove staged installers from C:\Temp
+  ansible.windows.win_shell: |
+    Get-ChildItem -Path C:\Temp -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+  changed_when: false
+
+- name: Build complete
+  ansible.builtin.debug:
+    msg: "Windows 11 24H2 VDI golden image provisioning complete - powering off for snapshot."

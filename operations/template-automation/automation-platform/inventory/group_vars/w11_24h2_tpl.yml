@@ -1,0 +1,64 @@
+# w11_24h2_tpl - VM shape, install media and build settings.
+# Values marked CHANGEME and the guest network are placeholders: put real,
+# site-specific values in w11_24h2_tpl.local.yml (gitignored, loaded last).
+# Secrets (vault_win_admin_password etc.) live in group_vars/all/vault.yml.
+
+# ---- Placement (build.sh's picker / --config overrides these) ----
+vcenter_cluster: "CHANGEME-cluster"
+vcenter_datastore: "CHANGEME-datastore"
+vcenter_folder: "CHANGEME-folder"           # nested path allowed, e.g. "EUC/Desktops/HZ-Templates"
+vcenter_network: "CHANGEME-portgroup"
+
+# ---- VM ----
+vm_cpu_count: 2
+vm_cores_per_socket: 2
+vm_mem_size_mb: 8192
+vm_disk_size_mb: 81920                      # Windows 11 needs at least 64 GB
+vm_guest_os_type: "windows11_64Guest"
+vm_version: 20
+vm_secure_boot: true                        # efi-secure; no vTPM (TPM check bypassed)
+
+# ---- Install media ----
+# ISO on the control node's NFS mount; Packer uploads it once to
+# [remote_cache_datastore] remote_cache_path/ and reuses it after that.
+win_iso_url: "/mnt/wdnfs/Ansible/windows/en-us_windows_11_business_editions_version_24h2_updated_feb_2025_x64_dvd_a7fb58bd.iso"
+win_iso_checksum: "none"                    # or "sha256:<hash>"
+remote_cache_datastore: ""                  # "" = the build datastore
+remote_cache_path: "packer_cache"
+iso_paths:
+  - "[] /vmimages/tools-isoimages/windows.iso"   # VMware Tools ISO served by ESXi
+
+# ---- Guest network (DHCP; used by build.sh's DNS pre-check) ----
+guest_hostname: w11-24h2-tpl                # max 15 characters
+guest_ip_cidr: "198.51.100.180/24"
+guest_gateway: "198.51.100.1"
+guest_dns_servers:
+  - "198.51.100.11"
+  - "198.51.100.20"
+mac_address: ""                             # "" = auto-assign
+
+# ---- Windows ----
+timezone: "W. Europe Standard Time"
+win_language: "en-US"
+win_keyboard: "0414:00000414"               # Norwegian; "0409:00000409" = US
+win_image_name: "Windows 11 Enterprise"
+win_kms_key: "NPPR9-FWDCX-D2C8J-H872K-2YT43"  # Windows 11 Enterprise GVLK (public KMS client key)
+win_full_name: "Administrator"
+win_org_name: "Contoso"
+winrm_port: 5985
+
+# ---- Build behaviour ----
+build_log_enabled: true
+build_log_dir: 'C:\ProgramData\Omnissa\Logs'
+enable_windows_update: true                 # needs internet or WSUS from the build network
+# Manual pauses - each waits for `touch /tmp/w11_24h2_tpl_<marker>.go` from a
+# second shell on the control node and fails the build after 60 minutes.
+osot_generalize_manual_pause: false         # before Sysprep   (pre_generalize_pause)
+osot_generalize_post_sysprep_pause: false   # after Sysprep    (post_sysprep_pause)
+verify_phase_logs_pause: false              # after OSOT steps (verify_log_<role>)
+
+# ---- Apps ----
+store_apps_to_remove:                       # Appx names, removed after Generalize
+  - Microsoft.Copilot
+  - Microsoft.BingSearch
+apps_to_install: []                         # [{name, installer: /mnt/wdnfs/Ansible/apps/<file>, arguments}]

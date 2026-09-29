@@ -1,0 +1,50 @@
+---
+# vCenter API only. The build VM is never published directly: its NIC is set
+# to an automatic MAC, it is cloned to <PUBLISHED_VM_PREFIX>-<timestamp>, and
+# that clone gets the snapshot Horizon forks instant clones from. The clone is
+# a plain pyVmomi clone - a customization/network spec on it caused
+# AGENT_CUSTOMIZATION_FAULT on instant-clone push.
+- name: Clone the build VM, then snapshot the clone for Horizon
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Flip {{ vm_name }}'s own NIC to Automatic MAC so it can never collide with the published clone or expose its old pinned identity
+      ansible.builtin.script: "{{ playbook_dir }}/set_nic_automatic.py"
+      environment:
+        VC_HOST: "{{ vcenter_server }}"
+        VC_USER: "{{ vcenter_username }}"
+        VC_PASSWORD: "{{ vcenter_password }}"
+        VC_VM_NAME: "{{ vm_name }}"
+      register: nic_fix_template
+      changed_when: "'After reconfigure' in nic_fix_template.stdout"
+
+    - name: Clone {{ vm_name }} to the published VM {{ published_vm_name }} (raw pyVmomi, no network/customization spec)
+      ansible.builtin.script: "{{ playbook_dir }}/clone_for_publish.py"
+      environment:
+        VC_HOST: "{{ vcenter_server }}"
+        VC_USER: "{{ vcenter_username }}"
+        VC_PASSWORD: "{{ vcenter_password }}"
+        VC_SOURCE_VM: "{{ vm_name }}"
+        VC_TARGET_VM: "{{ published_vm_name }}"
+        VC_DATACENTER: "{{ vcenter_datacenter }}"
+        VC_CLUSTER: "{{ vcenter_cluster }}"
+        VC_DATASTORE: "{{ vcenter_datastore }}"
+        VC_FOLDER_PATH: "{{ vcenter_folder }}"
+      register: clone_for_publish
+      changed_when: true
+
+    - name: Create the instant-clone snapshot on the published clone
+      community.vmware.vmware_guest_snapshot:
+        hostname: "{{ vcenter_server }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+        datacenter: "{{ vcenter_datacenter }}"
+        folder: "/{{ vcenter_datacenter }}/vm/{{ vcenter_folder }}"
+        name: "{{ published_vm_name }}"
+        state: present
+        snapshot_name: "{{ published_vm_name }}"
+        description: "Golden image build - {{ published_vm_name }} (cloned from {{ vm_name }})"
+        quiesce: false
+        memory_dump: false

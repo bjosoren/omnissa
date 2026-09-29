@@ -1,0 +1,29 @@
+---
+# Audit Mode is entered by the autounattend (oobeSystem Reseal/Mode=Audit);
+# this only verifies it and fails fast if not.
+- name: Confirm no pending reboot before this phase
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/wait_for_no_pending_reboot.yml"
+- name: Verify the VM entered Audit Mode automatically during install
+  ansible.windows.win_shell: |
+    (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State' -Name ImageState -ErrorAction SilentlyContinue).ImageState
+  register: audit_mode_check
+  changed_when: false
+
+- name: Fail if the VM did NOT enter Audit Mode automatically during install
+  ansible.builtin.fail:
+    msg: >-
+      Expected ImageState to be IMAGE_STATE_SPECIALIZE_RESEAL_TO_AUDIT (or
+      IMAGE_STATE_GENERALIZE_RESEAL_TO_AUDIT) but got
+      "{{ audit_mode_check.stdout | trim | default('(empty)') }}" instead -
+      the VM is not in Audit Mode. Check floppy/autounattend.pkrtpl.hcl's
+      own oobeSystem pass (Microsoft-Windows-Deployment/Reseal/Mode) landed
+      correctly on the floppy actually used for this build, before
+      re-running - every role after this one (dotnet35/windows_update/apps/
+      osot_optimize/osot_generalize) assumes Audit Mode is already active.
+  when: >-
+    (audit_mode_check.stdout | trim) not in
+    ['IMAGE_STATE_SPECIALIZE_RESEAL_TO_AUDIT', 'IMAGE_STATE_GENERALIZE_RESEAL_TO_AUDIT']
+
+- name: Show confirmed Audit Mode state
+  ansible.builtin.debug:
+    msg: "VM confirmed in Audit Mode: {{ audit_mode_check.stdout | trim }}"

@@ -1,102 +1,19 @@
 #!/usr/bin/env python3
 """
-Interactive placement/build-options picker, run by build.sh at the start of
-every build. Connects to vCenter and walks through, in order: cluster,
-ESXi host (optional), datastore, network/portgroup, VM folder (with a free-
-text "Other" option), collect-install-logs, publish-to-pool-or-farm (a type
-choice - Farm / Desktop Pool / skip - each enumerated live against Horizon
-with its own free-text "Other" fallback), and delete-the-build-VM-after-
-clone. Writes two files:
+Interactive build options for scripts/build.sh, read live from vCenter and
+Horizon: cluster, ESXi host (optional), datastore, port group, VM folder,
+collect install logs, publish target (Desktop Pool / Farm / skip) and delete
+the build VM afterwards.
 
-  --placement-output : YAML, loaded by build.sh as the last (highest-
-                        precedence) -e override into the existing Ansible
-                        group_vars pipeline - same mechanism as
-                        *_adv-vm-settings.yml. Holds the vCenter placement
-                        keys only (vcenter_cluster/host/datastore/network/
-                        folder).
+Writes two files for build.sh:
+  --placement-output  YAML with vcenter_* overrides (loaded last by Ansible)
+  --control-output    KEY=value lines build.sh sources: COLLECT_BUILD_LOGS,
+                      PUBLISH_TO_POOL, HORIZON_TARGET_TYPE,
+                      HORIZON_TARGET_NAME, DELETE_VM_AFTER
 
-  --control-output    : plain `KEY=value` bash assignments, sourced
-                         directly by build.sh for the answers that drive
-                         its OWN control flow (not Ansible/Packer vars):
-                         COLLECT_BUILD_LOGS, PUBLISH_TO_POOL,
-                         HORIZON_TARGET_TYPE, HORIZON_TARGET_NAME,
-                         DELETE_VM_AFTER.
-
-The Horizon step (step 7/8, pick_horizon_target()) asks Farm vs Desktop
-Pool vs "No - skip" FIRST, as an explicit choice - it does NOT derive the
-type from this image's horizon_pool_name/horizon_farm_name group_vars the
-way publish_to_pool.sh's own standalone fallback still does. Those two
-group_vars keys are only used here as a "(configured default: ...)" hint
-printed alongside whichever type you picked, nothing more - CHANGED from
-an earlier version that filtered to (and enforced) exactly one of the two,
-which meant you'd only ever see the type group_vars happened to have set,
-even when other pools/farms existed and you wanted to publish somewhere
-else for a one-off run. After the type choice, it logs into the SAME
-Connection Server publish_to_pool.sh uses, with the SAME credentials
-(horizon_connection_server/horizon_api_username/horizon_api_domain/
-vault_horizon_api_password), read directly from this image's own group_vars
-files (base + _agents + _osot + _adv-vm-settings + .local, layered in the
-same order build.sh's GROUP_VARS_ARGS uses) rather than via a full
-ansible-playbook run - resolve_vars.yml hasn't run yet at this point in
-build.sh, this picker runs before it. Endpoints (GET
-/rest/inventory/v1/desktop-pools, GET /rest/inventory/v2/farms) are taken
-directly from publish_to_pool.sh's own, already-working implementation -
-see that script's "Pool vs farm" header comment for the full story,
-including that the farms endpoint specifically has NOT been run for real
-yet against this environment's Connection Server. If the login/enumerate
-call itself fails (bad creds, network, Horizon down) or comes back empty,
-this falls back to letting you type the name directly instead of aborting
-the whole build - same "Other (Provide)" escape hatch as the enumerated
-list itself, just reached a different way.
-
-Credentials and vcenter_server/vcenter_datacenter are resolved the same way
-every other part of this platform gets them: plaintext from
-inventory/group_vars/all.yml, secrets decrypted from
-inventory/group_vars/all/vault.yml via the standing ~/.vault_pass file.
-
-Usage (called from build.sh - after the ansible-venv is activated, since
-this needs pyyaml/pyvmomi/requests from that venv):
-  python3 scripts/select_placement.py \
-      --project-root "$PROJECT_ROOT" \
-      --image-key "$IMAGE_KEY" \
-      --placement-output "$PLACEMENT_OVERRIDE_FILE" \
-      --control-output "$PLACEMENT_CONTROL_FILE"
-
----- Saved configs / --load (ADDED 2026-09-28) ----
-At the very end of the interactive walk-through above (right after "Proceed
-with these values?"), you're now also asked whether to save the answers
-under a name, e.g. "nightly-rdsh". Saying yes writes the SAME two outputs
-you'd otherwise only get as build.sh's throwaway temp files to a permanent
-pair under <project-root>/configs/: <image_key>__<name>.overrides.yml
-and <image_key>__<name>.control.sh - nothing about their format changes,
-they're just kept around instead of shredded at exit. Called a "config"
-rather than a "placement" because it's really the whole bundle - vCenter
-placement AND the collect-logs/publish/delete-after answers - not just
-where the VM lands.
-
-  python3 scripts/select_placement.py \
-      --project-root "$PROJECT_ROOT" \
-      --image-key "$IMAGE_KEY" \
-      --placement-output "$PLACEMENT_OVERRIDE_FILE" \
-      --control-output "$PLACEMENT_CONTROL_FILE" \
-      --load nightly-rdsh
-
---load skips EVERY prompt above, and - just as importantly for a cron/
-systemd context - never touches vCenter or Horizon at all: it just reads
-the saved pair back and copies them onto --placement-output/--control-
-output, exactly as if you'd answered the same way interactively. That
-makes it safe to run genuinely unattended: no terminal needed, and no
-build-time dependency on vCenter/Horizon being reachable at THIS step
-(the actual build further down in build.sh still needs vCenter, same as
-always). See build.sh's own "Unattended / scheduled builds" comment for
-how --config NAME there maps to this flag.
-
-Nothing about PUBLISH_TO_POOL is special-cased for --load - whatever was
-true when the config was saved (including "No - skip" publish) is what
-plays back. If you want a saved config that only ever builds and
-snapshots without ever pushing to a live pool/farm, answer "No - skip
-clone/snapshot/publish" at save time and it stays that way on every
-unattended rerun.
+The answers can be saved under a name (configs/<image>__<name>.*) and replayed
+without prompts or vCenter/Horizon access:
+  scripts/build.sh <image> --config <name>
 """
 import argparse
 import re
@@ -116,14 +33,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 OTHER_SENTINEL = object()
 
-# Saved-config names become part of a filename (see config_paths() below)
-# - restricted to this set so a typo or stray character can't put a path
-# separator, or anything else surprising, into a path under configs/. A
-# dot is allowed (on top of letters/numbers/-/_) so a name can look like
-# "rdsh_2025.cfg" if you want it to - it's just a label, nothing parses it
-# as a real file extension.
 CONFIG_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
-
 
 def load_vault(project_root: Path):
     vault_path = project_root / "inventory/group_vars/all/vault.yml"
@@ -135,16 +45,10 @@ def load_vault(project_root: Path):
     ).stdout
     return yaml.safe_load(decrypted)
 
-
 def resolve_jinja(value, vault):
-    # Committed group_vars files reference vault secrets as
-    # "{{ vault_some_name }}" - resolve that one specific pattern (not a
-    # full Jinja engine) against the already-decrypted vault dict. Anything
-    # else (a plain string, number, bool, list, dict) passes through as-is.
     if isinstance(value, str) and value.startswith("{{") and value.endswith("}}"):
         return vault.get(value.strip("{} ").strip(), "")
     return value
-
 
 def load_vcenter_context(project_root: Path, vault):
     all_yml = yaml.safe_load((project_root / "inventory/group_vars/all.yml").read_text())
@@ -155,16 +59,8 @@ def load_vcenter_context(project_root: Path, vault):
         "datacenter": all_yml["vcenter_datacenter"],
     }
 
-
 def load_group_vars(project_root: Path, image_key: str, vault):
-    """
-    Layers this image's group_vars files in the same order build.sh's
-    GROUP_VARS_ARGS does (base -> _agents -> _osot -> _adv-vm-settings ->
-    .local), each later file's keys overriding earlier ones - mirroring
-    Ansible's later-`-e`-wins semantics without needing a real
-    ansible-playbook run (resolve_vars.yml hasn't executed yet when this
-    picker runs).
-    """
+    """Merge this image's group_vars files in build.sh's order (later files win)."""
     merged = {}
     for suffix in ("", "_agents", "_osot", "_adv-vm-settings"):
         path = project_root / "inventory/group_vars" / f"{image_key}{suffix}.yml"
@@ -174,7 +70,6 @@ def load_group_vars(project_root: Path, image_key: str, vault):
     if local_path.exists():
         merged.update(yaml.safe_load(local_path.read_text()) or {})
     return {k: resolve_jinja(v, vault) for k, v in merged.items()}
-
 
 def find_datacenter(content, name):
     container = content.viewManager.CreateContainerView(content.rootFolder, [vim.Datacenter], True)
@@ -186,14 +81,12 @@ def find_datacenter(content, name):
         container.Destroy()
     return None
 
-
 def list_of_type(content, root, vimtype):
     container = content.viewManager.CreateContainerView(root, [vimtype], True)
     try:
         return list(container.view)
     finally:
         container.Destroy()
-
 
 def list_folders(dc):
     """Flatten the VM folder tree under this datacenter into 'path/like/this' strings."""
@@ -209,14 +102,8 @@ def list_folders(dc):
     walk(dc.vmFolder, "")
     return results
 
-
 def prompt_choice(label, items, name_fn, allow_none_label=None, allow_other_label=None):
-    """
-    Numbered picker. 0 (if allow_none_label) = None. A trailing entry (if
-    allow_other_label) returns the OTHER_SENTINEL object, letting the
-    caller fall through to a free-text prompt - used for VM folder's
-    "Other (Provide)" option.
-    """
+    """Numbered picker. 0 = None (if allow_none_label); last = OTHER_SENTINEL (if allow_other_label)."""
     print(f"\n{label}:")
     if allow_none_label:
         print(f"  0) {allow_none_label}")
@@ -241,12 +128,10 @@ def prompt_choice(label, items, name_fn, allow_none_label=None, allow_other_labe
             return items[idx - 1]
         print("Out of range.")
 
-
 def prompt_yes_no(label, default_yes=True):
     suffix = "[Y/n]" if default_yes else "[y/N]"
     raw = input(f"{label} {suffix}: ").strip().lower()
     return default_yes if not raw else raw.startswith("y")
-
 
 def horizon_login(server, username, password, domain):
     resp = requests.post(
@@ -260,7 +145,6 @@ def horizon_login(server, username, password, domain):
         raise RuntimeError(f"Horizon login to {server} failed: {resp.text}")
     return token
 
-
 def horizon_list(server, token, path):
     resp = requests.get(
         f"https://{server}{path}",
@@ -270,15 +154,8 @@ def horizon_list(server, token, path):
     resp.raise_for_status()
     return resp.json()
 
-
 def _try_horizon_list(server, user, password, domain, list_path, type_label):
-    """
-    Best-effort login + list - returns the (possibly empty) list on success,
-    or None if the login/request itself failed (bad creds, network, Horizon
-    down). Callers treat None the same as an empty result: fall back to
-    letting the person type the target name directly rather than aborting
-    the whole build over a Horizon-side hiccup at this one step.
-    """
+    """Login + list; None on failure so the caller falls back to typing a name."""
     try:
         print(f"\n==> Logging in to {server}")
         token = horizon_login(server, user, password, domain)
@@ -287,7 +164,6 @@ def _try_horizon_list(server, user, password, domain, list_path, type_label):
         print(f"    Could not reach Horizon to list {type_label}s ({e}) - enter the name directly below.")
         return None
 
-
 def _prompt_target_name(type_label):
     while True:
         name = input(f"{type_label} name: ").strip()
@@ -295,18 +171,8 @@ def _prompt_target_name(type_label):
             return name
         print(f"{type_label} name can't be empty.")
 
-
 def pick_horizon_target(project_root: Path, image_key: str, vault):
-    """
-    Asks Farm vs Desktop Pool vs "No - skip" first (an explicit choice, not
-    derived from this image's horizon_pool_name/horizon_farm_name group_vars
-    - see this module's docstring for why), then enumerates that ONE type
-    live against Horizon and lets you pick from it or type a name directly
-    ("Other (Provide)", same pattern as the VM-folder step). Returns
-    (do_publish, target_type, target_name) - do_publish is False (with the
-    other two "") when "No - skip" was chosen; target_type is "farm" or
-    "pool" otherwise.
-    """
+    """Ask Farm / Desktop Pool / skip, then pick from Horizon's live list (or type a name). Returns (publish, type, name)."""
     type_choice = prompt_choice(
         "Publish to Desktop-pool / Farm?",
         ["Farm", "Desktop Pool"], lambda t: t,
@@ -351,20 +217,14 @@ def pick_horizon_target(project_root: Path, image_key: str, vault):
         )
         target_name = _prompt_target_name(type_choice) if chosen is OTHER_SENTINEL else chosen.get("name", "")
     else:
-        if targets is not None:  # reached Horizon fine, it just has none of this type
+        if targets is not None:
             print(f"    Horizon returned no {target_type}s from {list_path} - enter the name directly.")
         target_name = _prompt_target_name(type_choice)
 
     return True, target_type, target_name
 
-
 def config_paths(project_root: Path, image_key: str, name: str):
-    """
-    Where a saved config named `name` for `image_key` lives on disk.
-    Namespaced by image_key (as "<image_key>__<name>") so the same short
-    name - "nightly", say - can be reused across different images without
-    one silently overwriting or getting loaded for the other.
-    """
+    """Paths of a saved config: configs/<image_key>__<name>.overrides.yml / .control.sh"""
     if not CONFIG_NAME_RE.fullmatch(name):
         sys.exit(
             f"Invalid config name '{name}' - use only letters, numbers, "
@@ -376,16 +236,8 @@ def config_paths(project_root: Path, image_key: str, name: str):
         base / f"{image_key}__{name}.control.sh",
     )
 
-
 def config_header(image_key: str, name: str, describes: str) -> str:
-    """
-    A short comment header written at the top of a saved config's on-disk
-    files. Safe on both sides - '#' is a comment in YAML the same as it is
-    in bash, so this doesn't affect either the -e @file Ansible load of
-    the .overrides.yml or build.sh sourcing the .control.sh - and
-    load_saved_config()'s own summary printout filters '#' lines back out
-    when it echoes a loaded config's contents.
-    """
+    """Comment header for saved config files ('#' is a comment in YAML and bash)."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return (
         f"# {describes} for saved config '{name}' (image '{image_key}')\n"
@@ -399,15 +251,9 @@ def config_header(image_key: str, name: str, describes: str) -> str:
         "#\n"
     )
 
-
 def load_saved_config(project_root: Path, image_key: str, name: str,
                        placement_output: str, control_output: str):
-    """
-    --load path: read a previously saved config back and copy it onto
-    --placement-output/--control-output, with no vCenter or Horizon call at
-    all - see this module's docstring for why that matters for unattended/
-    scheduled runs.
-    """
+    """--load: copy a saved config onto the output files; no vCenter/Horizon calls."""
     overrides_path, control_path = config_paths(project_root, image_key, name)
     if not overrides_path.exists() or not control_path.exists():
         sys.exit(
@@ -433,7 +279,6 @@ def load_saved_config(project_root: Path, image_key: str, name: str,
 
     Path(placement_output).write_text(overrides_path.read_text())
     Path(control_output).write_text(control_path.read_text())
-
 
 def main():
     p = argparse.ArgumentParser()
@@ -475,7 +320,6 @@ def main():
         if dc is None:
             sys.exit(f"Datacenter '{ctx['datacenter']}' not found")
 
-        # ---- 1. Cluster ----
         clusters = sorted(
             list_of_type(content, dc.hostFolder, vim.ClusterComputeResource),
             key=lambda c: c.name,
@@ -484,7 +328,6 @@ def main():
             sys.exit("No clusters found under this datacenter")
         cluster = prompt_choice("Select Cluster", clusters, lambda c: c.name)
 
-        # ---- 2. ESXi host (optional) ----
         hosts = sorted(cluster.host, key=lambda h: h.name)
         host = prompt_choice(
             "Select ESXi-host", hosts,
@@ -492,7 +335,6 @@ def main():
             allow_none_label="Any (let DRS decide)",
         )
 
-        # ---- 3. Datastore ----
         datastores = sorted(cluster.datastore, key=lambda d: d.name)
         if not datastores:
             sys.exit(f"No datastores visible to cluster '{cluster.name}'")
@@ -501,13 +343,11 @@ def main():
             lambda d: f"{d.name}  ({d.summary.freeSpace / 2**30:.0f} GB free)",
         )
 
-        # ---- 4. Portgroup / network ----
         networks = sorted(cluster.network, key=lambda n: n.name)
         if not networks:
             sys.exit(f"No networks visible to cluster '{cluster.name}'")
         network = prompt_choice("Select Portgroup", networks, lambda n: n.name)
 
-        # ---- 5. VM folder (enumerated, or free-text "Other (Provide)") ----
         folders = list_folders(dc)
         if not folders:
             sys.exit(f"No VM folders found under datacenter '{dc.name}'")
@@ -524,19 +364,12 @@ def main():
         else:
             folder_path = folder_choice[0]
 
-        # ---- 6. Collect install logs? ----
         collect_logs = prompt_yes_no("Collect Install logs?", default_yes=True)
 
-        # ---- 7/8. Publish to Desktop-pool/Farm? + which one ----
-        # The type choice (Farm / Desktop Pool / "No - skip") and the actual
-        # target picker are one step now, both inside pick_horizon_target() -
-        # see that function and this module's docstring for why this no
-        # longer derives the type from group_vars.
         publish_to_pool, horizon_target_type, horizon_target_name = pick_horizon_target(
             project_root, args.image_key, vault
         )
 
-        # ---- 9. Delete template-vm after clone? ----
         delete_vm_after = prompt_yes_no("Delete template-vm after clone?", default_yes=False)
 
         placement_overrides = {
@@ -558,17 +391,6 @@ def main():
         if not prompt_yes_no("\nProceed with these values?", default_yes=True):
             sys.exit("Aborted at placement selection.")
 
-        # ---- Save for unattended/scheduled reruns? (ADDED 2026-09-28) ----
-        # Asked here, after the values are locked in but before they're
-        # written anywhere - a "no" (the default) leaves this run behaving
-        # exactly as it always has, one-off and un-persisted. A "yes" writes
-        # the SAME placement_overrides/control_lines computed below to a
-        # permanent, image_key-namespaced pair under configs/ as well as
-        # to this run's own (still-temp, still-shredded-at-exit)
-        # --placement-output/--control-output - see config_paths() and
-        # this module's docstring. Called a "config" (not "placement")
-        # since it also carries collect-logs/publish/delete-after, not just
-        # the vCenter placement fields.
         save_name = None
         if prompt_yes_no(
             "Save these settings for unattended/scheduled reruns?", default_yes=False
@@ -617,7 +439,6 @@ def main():
             print(f"      scripts/build.sh {args.image_key} --config {save_name}")
     finally:
         Disconnect(si)
-
 
 if __name__ == "__main__":
     main()

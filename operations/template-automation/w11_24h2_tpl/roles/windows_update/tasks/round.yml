@@ -1,0 +1,52 @@
+- name: "Search for, install, and reboot for Windows updates ({{ item }})"
+  ansible.windows.win_updates:
+    category_names:
+      - SecurityUpdates
+      - CriticalUpdates
+      - UpdateRollups
+    reject_list:
+      - "KB2267602"
+    state: installed
+    reboot: true
+    reboot_timeout: 1800
+  register: wu_round
+  become: true
+  become_method: runas
+  become_user: SYSTEM
+
+- name: "Show this round's result ({{ item }})"
+  ansible.builtin.debug:
+    msg: >-
+      Round {{ item }}: found={{ wu_round.found_update_count }}
+      installed={{ wu_round.installed_update_count }}
+      reboot_required={{ wu_round.reboot_required }}
+      titles={{ (wu_round.updates | default({})).values()
+                 | map(attribute='title') | list }}
+
+- name: "Append this round's installed updates to windows_update_report.log ({{ item }})"
+  ansible.windows.win_shell: |
+    $updatesJson = @'
+    {{ ((wu_round.updates | default({})).values() | list) | to_json }}
+    '@
+    $updates = $updatesJson | ConvertFrom-Json
+    $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $lines = @()
+    $lines += "=== Round {{ item }}/6 - $stamp ==="
+    $lines += "Found: {{ wu_round.found_update_count | default(0) }}  Installed: {{ wu_round.installed_update_count | default(0) }}  RebootRequired: {{ wu_round.reboot_required | default(false) }}"
+    foreach ($u in $updates) {
+      $kb = if ($u.kb) { ($u.kb -join ',') } else { 'n/a' }
+      $state = if ($u.installed) { 'installed' } else { 'not installed' }
+      $lines += "  - KB$($kb): $($u.title) ($state)"
+    }
+    $lines += ""
+    Add-Content -Path "{{ build_log_dir }}\windows_update_report.log" -Value $lines
+  when:
+    - build_log_enabled | default(true) | bool
+    - (wu_round.installed_update_count | default(0) | int) > 0
+  ignore_errors: true
+
+- name: "Mark this round clear if nothing was found/installed and nothing is pending ({{ item }})"
+  ansible.builtin.set_fact:
+    windows_update_clear: >-
+      {{ (wu_round.found_update_count | default(0) == 0)
+         and not (wu_round.reboot_required | default(false)) }}

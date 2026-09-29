@@ -1,0 +1,3 @@
+---
+# Allows osot_optimize to be listed twice in playbook.yml (passes 1 and 2).
+allow_duplicates: true

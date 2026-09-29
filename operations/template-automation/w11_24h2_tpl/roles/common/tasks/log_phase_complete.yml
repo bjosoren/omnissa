@@ -1,0 +1,13 @@
+---
+# Imported as the last task of each role: appends a line to
+# build_log_dir\build_phase_log.txt - a timeline of completed phases.
+- name: "Append phase-complete line to build_phase_log.txt ({{ role_name | default(ansible_role_name | default('unknown role')) }})"
+  ansible.windows.win_shell: |
+    $line = "{0} | {1,-22} | {2}{3}" -f `
+      (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), `
+      "{{ role_name | default(ansible_role_name | default('unknown role')) }}", `
+      "{{ role_status | default('OK') }}", `
+      "{{ (' - ' + role_detail) if (role_detail | default('')) | length > 0 else '' }}"
+    Add-Content -Path "{{ build_log_dir }}\build_phase_log.txt" -Value $line
+  when: build_log_enabled | default(true) | bool
+  ignore_errors: true

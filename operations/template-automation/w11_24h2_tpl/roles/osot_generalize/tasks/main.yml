@@ -1,0 +1,114 @@
+---
+# OSOT Generalize = Sysprep with templates/generalize_answer.xml, which
+# re-enables WinRM and auto-logon after the reboot. WinRM drops mid-task; the
+# role waits for it to return and resets Ansible's connection. Optional manual
+# pauses before and after: osot_generalize_manual_pause and
+# osot_generalize_post_sysprep_pause (touch the /tmp/*.go marker to continue).
+- name: Confirm no pending reboot before this phase
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/wait_for_no_pending_reboot.yml"
+- name: PAUSE (file-gate) - clear any stale continue-marker before waiting for pre-Generalize review
+  ansible.builtin.debug:
+    msg: "{{ lookup('ansible.builtin.pipe', 'rm -f /tmp/w11_24h2_tpl_pre_generalize_pause.go; echo marker-cleared') }}"
+  when: osot_generalize_manual_pause | default(false) | bool
+
+- name: Show how to review the VM before Generalize
+  ansible.builtin.debug:
+    msg:
+      - "dotnet35/windows_update/apps/osot_optimize have all completed - the VM is still in Audit Mode, nothing committed yet."
+      - "Open this VM's console in vCenter (or RDP) and review whatever you want to check before Generalize runs - e.g.:"
+      - "    Get-Content 'C:\\ProgramData\\Omnissa\\Logs\\osot_optimize_report.log'"
+      - "  to see OSOT's own Optimize summary (copied there by osot_optimize's own task)."
+      - ""
+      - "IMPORTANT: once you release this pause, Generalize (sysprep -g) runs - that consumes one of Sysprep's limited rearm counts and exits Audit Mode for good, resealing into full OOBE. This is your last chance to look around before that happens."
+      - ""
+      - "When ready to continue: from a SEPARATE shell on the Ansible control node (a second SSH session - this terminal is busy running packer build) run:"
+      - "    touch /tmp/w11_24h2_tpl_pre_generalize_pause.go"
+  when: osot_generalize_manual_pause | default(false) | bool
+
+- name: PAUSE (file-gate) - wait for pre-Generalize review to finish
+  ansible.builtin.pause:
+    seconds: 15
+  until: (lookup('ansible.builtin.fileglob', '/tmp/w11_24h2_tpl_pre_generalize_pause.go') | default([], true) | length) > 0
+  retries: 240
+  delay: 0
+  when: osot_generalize_manual_pause | default(false) | bool
+
+- name: Ensure OSOT is present on VM (idempotent copy)
+  ansible.windows.win_copy:
+    src: "{{ osot_installer }}"
+    dest: "C:\\Temp\\{{ osot_installer | basename }}"
+
+- name: Deliver custom Sysprep answer file for OSOT Generalize
+  ansible.windows.win_template:
+    src: generalize_answer.xml.j2
+    dest: "C:\\Temp\\generalize_answer.xml"
+
+- name: Trigger OSOT Generalize pass (Sysprep - reboots into OOBE mini-setup)
+  ansible.windows.win_shell: |
+    & "C:\Temp\{{ osot_installer | basename }}" -g "C:\Temp\generalize_answer.xml" -reboot
+  async: 15
+  poll: 0
+  ignore_errors: true
+
+- name: Pause to let Sysprep begin tearing down WinRM before reconnecting
+  ansible.builtin.pause:
+    seconds: 90
+
+- name: Wait for WinRM to come back after Sysprep + OOBE mini-setup
+  ansible.builtin.wait_for_connection:
+    connect_timeout: 30
+    sleep: 15
+    timeout: 1800
+    delay: 30
+
+- name: Reset Ansible's cached WinRM connection after Sysprep/OOBE (avoids a stale-shell "invalid selectors" fault on the next task)
+  ansible.builtin.meta: reset_connection
+
+- name: Wait for AppX package provisioning to finish after Sysprep/OOBE first login
+  ansible.builtin.pause:
+    seconds: 150
+
+- name: Copy OSOT's own Generalize log into build_log_dir
+  ansible.windows.win_shell: |
+    $src = Get-ChildItem -Path "C:\ProgramData\Omnissa\Omnissa OS Optimization Tool\Log" -Filter "Generalize_*.log" -ErrorAction SilentlyContinue |
+      Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($src) {
+      Copy-Item -Path $src.FullName -Destination "{{ build_log_dir }}\osot_generalize_report.log" -Force
+      Write-Host "Copied $($src.FullName) to {{ build_log_dir }}\osot_generalize_report.log"
+    } else {
+      Write-Host "No Generalize_*.log found under OSOT's own log folder - filename pattern may differ from Optimize_*.log, nothing to copy."
+    }
+  when: build_log_enabled | default(true) | bool
+  ignore_errors: true
+
+- name: PAUSE (file-gate) - clear any stale continue-marker before waiting for post-Sysprep review
+  ansible.builtin.debug:
+    msg: "{{ lookup('ansible.builtin.pipe', 'rm -f /tmp/w11_24h2_tpl_post_sysprep_pause.go; echo marker-cleared') }}"
+  when: osot_generalize_post_sysprep_pause | default(true) | bool
+
+- name: Show how to review Sysprep's result before store_apps_cleanup runs
+  ansible.builtin.debug:
+    msg:
+      - "Sysprep/Generalize has completed, WinRM is back up, and the 150s AppX-provisioning wait has elapsed."
+      - "Open this VM's console in vCenter (or RDP) and confirm Sysprep's mini-setup actually finished clean - e.g.:"
+      - "    Get-Content 'C:\\Windows\\Panther\\UnattendGS\\setupact.log' -Tail 50"
+      - "    Get-Content 'C:\\Windows\\Panther\\UnattendGS\\setuperr.log'"
+      - "  and check the console shows a normal logon screen, not a stuck Sysprep error dialog."
+      - "OSOT's own Generalize log has also just been copied to {{ build_log_dir }}\\osot_generalize_report.log, if you'd rather read it than console in."
+      - ""
+      - "This is the last checkpoint before store_apps_cleanup (and everything after it) runs against this VM."
+      - ""
+      - "When ready to continue: from a SEPARATE shell on the Ansible control node (a second SSH session - this terminal is busy running packer build) run:"
+      - "    touch /tmp/w11_24h2_tpl_post_sysprep_pause.go"
+  when: osot_generalize_post_sysprep_pause | default(true) | bool
+
+- name: PAUSE (file-gate) - wait for post-Sysprep review to finish
+  ansible.builtin.pause:
+    seconds: 15
+  until: (lookup('ansible.builtin.fileglob', '/tmp/w11_24h2_tpl_post_sysprep_pause.go') | default([], true) | length) > 0
+  retries: 240
+  delay: 0
+  when: osot_generalize_post_sysprep_pause | default(true) | bool
+
+- name: Log phase completion
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/log_phase_complete.yml"

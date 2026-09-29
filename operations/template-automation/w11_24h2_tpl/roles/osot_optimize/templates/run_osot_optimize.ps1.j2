@@ -1,0 +1,3 @@
+# Starts OSOT Optimize (-o) detached; roles/osot_optimize polls its log.
+$Optimizer = "C:\Temp\{{ osot_installer | basename }}"
+Start-Process -FilePath $Optimizer -ArgumentList @('-o') -Verb RunAs

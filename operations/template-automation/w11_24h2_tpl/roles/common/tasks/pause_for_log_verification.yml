@@ -1,0 +1,27 @@
+---
+# Optional manual pause (verify_phase_logs_pause). Released by
+# `touch /tmp/w11_24h2_tpl_verify_log_<role>.go` from a second shell on the
+# control node; fails the build after 60 minutes.
+- name: "PAUSE (file-gate) - clear any stale continue-marker before waiting for {{ ansible_role_name }}'s log-verification review"
+  ansible.builtin.debug:
+    msg: "{{ lookup('ansible.builtin.pipe', 'rm -f /tmp/w11_24h2_tpl_verify_log_' + ansible_role_name + '.go; echo marker-cleared') }}"
+  when: verify_phase_logs_pause | default(false) | bool
+
+- name: "Show how to verify {{ ansible_role_name }}'s log in build_log_dir"
+  ansible.builtin.debug:
+    msg:
+      - "{{ ansible_role_name }} has just written its log into build_log_dir ({{ build_log_dir }})."
+      - "Open this VM's console in vCenter (or RDP) and confirm it's there, e.g.:"
+      - "    Get-ChildItem '{{ build_log_dir }}' | Sort-Object LastWriteTime -Descending | Select-Object -First 10"
+      - ""
+      - "When ready to continue: from a SEPARATE shell on the Ansible control node (a second SSH session - this terminal is busy running packer build) run:"
+      - "    touch /tmp/w11_24h2_tpl_verify_log_{{ ansible_role_name }}.go"
+  when: verify_phase_logs_pause | default(false) | bool
+
+- name: "PAUSE (file-gate) - wait for {{ ansible_role_name }}'s log-verification review to finish"
+  ansible.builtin.pause:
+    seconds: 15
+  until: (lookup('ansible.builtin.fileglob', '/tmp/w11_24h2_tpl_verify_log_' + ansible_role_name + '.go') | default([], true) | length) > 0
+  retries: 240
+  delay: 0
+  when: verify_phase_logs_pause | default(false) | bool

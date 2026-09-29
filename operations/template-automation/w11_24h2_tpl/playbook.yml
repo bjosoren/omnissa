@@ -1,0 +1,30 @@
+---
+# Runs inside Packer's ansible provisioner over WinRM, once, top to bottom.
+# Roles up to osot_generalize run in Audit Mode; OSOT Generalize (Sysprep)
+# exits it. Shutdown is Packer's; clone/snapshot/publish is scripts/build.sh.
+- name: Build the Windows 11 24H2 Omnissa Horizon VDI golden image
+  hosts: all
+  gather_facts: true
+  roles:
+    - role: base                  # C:\Temp, log dir, Secure Boot check
+    - role: vmware_tools          # verify the autounattend install, settle reboots
+    - role: enter_audit_mode      # verify Audit Mode
+    - role: dotnet35              # NetFx3 + .NET 4.6.2+ check
+    - role: windows_update        # looped until nothing is left
+      when: enable_windows_update | default(true) | bool
+    - role: apps                  # optional, apps_to_install
+    - role: osot_optimize         # OSOT Optimize, pass 1
+    - role: appx_sysprep_guard    # stop per-user Appx packages breaking Sysprep
+    - role: osot_generalize       # OSOT Generalize (Sysprep), leaves Audit Mode
+    - role: store_apps_cleanup    # store_apps_to_remove
+    - role: osot_optimize         # OSOT Optimize, pass 2 (Sysprep reverts some)
+      vars:
+        osot_optimize_pass_label: "(pass 2 of 2, post-Generalize)"
+        osot_optimize_report_name: "osot_optimize_report_pass2.log"
+    - role: horizon_agent         # VDI mode
+    - role: dem
+    - role: appvolumes
+    - role: osot_finalize_cleanup # OSOT Finalize jobs 0-7 (incl. SDelete)
+    - role: osot_finalize         # OSOT Finalize jobs 9-10
+    - role: collect_build_logs    # zip logs to the control node
+    - role: cleanup

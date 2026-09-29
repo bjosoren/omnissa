@@ -1,0 +1,36 @@
+---
+# Zip build_log_dir and fetch it to images/<key>/build_logs/ on the control
+# node (collect_build_logs, set by build.sh's placement prompt).
+- name: Zip build_log_dir into a single archive for download
+  ansible.windows.win_shell: |
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $zipPath = "{{ build_log_dir }}\..\build_logs_$stamp.zip"
+    Compress-Archive -Path "{{ build_log_dir }}\*" -DestinationPath $zipPath -Force
+    Write-Output (Resolve-Path $zipPath).Path
+  register: collect_build_logs_zip
+  when: collect_build_logs | default(true) | bool
+  ignore_errors: true
+
+- name: Fetch build logs archive to the Ansible control node
+  ansible.builtin.fetch:
+    src: "{{ collect_build_logs_zip.stdout | trim }}"
+    dest: "{{ collect_build_logs_dest_dir | default(playbook_dir ~ '/build_logs/') }}"
+    flat: true
+  when: >-
+    (collect_build_logs | default(true) | bool)
+    and (collect_build_logs_zip.stdout | default('') | trim | length) > 0
+
+- name: Show where the build logs archive landed
+  ansible.builtin.debug:
+    msg: "Build logs archive fetched to {{ collect_build_logs_dest_dir | default(playbook_dir ~ '/build_logs/') }} on the Ansible control node."
+  when: >-
+    (collect_build_logs | default(true) | bool)
+    and (collect_build_logs_zip.stdout | default('') | trim | length) > 0
+
+- name: Note that log collection was skipped
+  ansible.builtin.debug:
+    msg: "collect_build_logs is false (declined at scripts/build.sh's start-of-build prompt, or set false in group_vars) - skipped zipping/fetching build_log_dir."
+  when: not (collect_build_logs | default(true) | bool)
+
+- name: Log phase completion
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/log_phase_complete.yml"

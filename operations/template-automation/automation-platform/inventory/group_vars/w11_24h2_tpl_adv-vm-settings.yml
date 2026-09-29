@@ -1,0 +1,7 @@
+# w11_24h2_tpl - VM advanced parameters (vSphere extraConfig), set on the build
+# VM by Packer and inherited by the published clone and instant clones.
+# Keys must be indented under vm_advanced_settings:, values quoted strings.
+#   scripts/vm_advanced_settings.py dump w11_24h2_tpl --vm <vm> --suggest   # see what a VM has
+#   scripts/vm_advanced_settings.py diff w11_24h2_tpl --vm <vm>             # verify a build
+vm_advanced_settings:
+  devices.hotplug: "FALSE"      # hide "Safely Remove Hardware" for NICs/disks

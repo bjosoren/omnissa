@@ -1,0 +1,20 @@
+---
+# One check/reboot round for wait_for_no_pending_reboot.yml.
+- name: "Check for a pending reboot (round {{ _wfnpr_round }}/{{ wait_for_no_pending_reboot_max_rounds | default(4) }})"
+  ansible.windows.win_shell: |
+    $cbs = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'
+    $wu  = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
+    if ($cbs -or $wu) { 'pending' } else { 'clear' }
+  register: _wfnpr_check
+  changed_when: false
+
+- name: "Reboot to settle pending state (round {{ _wfnpr_round }}/{{ wait_for_no_pending_reboot_max_rounds | default(4) }})"
+  ansible.windows.win_reboot:
+    reboot_timeout: 1800
+    post_reboot_delay: 90
+    msg: "Rebooting to settle a pending reboot before the next phase"
+  when: _wfnpr_check.stdout | trim == 'pending'
+
+- name: "Record this round's result"
+  ansible.builtin.set_fact:
+    _wfnpr_pending: "{{ _wfnpr_check.stdout | trim == 'pending' }}"

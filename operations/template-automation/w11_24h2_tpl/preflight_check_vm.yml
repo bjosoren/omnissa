@@ -1,0 +1,24 @@
+---
+# Tells scripts/build.sh whether the build VM already exists (it then asks
+# before deleting it).
+- name: Check whether the build VM already exists
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: List VMs in the target folder
+      community.vmware.vmware_vm_info:
+        hostname: "{{ vcenter_server }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+        folder: "/{{ vcenter_datacenter }}/vm/{{ vcenter_folder }}"
+      register: vm_list
+    - name: Determine whether {{ vm_name }} is among them
+      ansible.builtin.set_fact:
+        vm_already_exists: "{{ (vm_list.virtual_machines | selectattr('guest_name', 'equalto', vm_name) | list | length) > 0 }}"
+    - name: Write the result for build.sh to read
+      ansible.builtin.copy:
+        dest: "{{ check_result_file }}"
+        content: "{{ {'exists': vm_already_exists} | to_nice_json }}"
+        mode: '0600'

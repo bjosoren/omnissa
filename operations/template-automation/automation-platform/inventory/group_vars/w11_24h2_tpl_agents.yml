@@ -1,0 +1,48 @@
+# w11_24h2_tpl - Horizon Agent, DEM and App Volumes agent settings, and the
+# Horizon desktop pool build.sh publishes to. Installer paths are on the
+# control node's NFS mount; real names go in w11_24h2_tpl.local.yml.
+
+# ---- Horizon Agent (VDI) - each toggle adds an ADDLOCAL feature ----
+horizon_agent_installer: "/mnt/wdnfs/Ansible/horizon/CHANGEME-horizon-agent-installer.exe"
+horizon_vc_managed: true
+horizon_core: true
+horizon_blast: true
+horizon_usb: true
+horizon_ngvc: true              # required for instant clones
+horizon_rtav: true
+horizon_cdr: true
+horizon_serial_port: false
+horizon_scanner: false
+horizon_geolocation: false
+horizon_smartcard: true
+horizon_audio: true
+horizon_mmr: true
+horizon_rdp: false
+horizon_sdo_sensor: false
+horizon_perf_tracker: true      # needs .NET 4.6.2+ (checked by roles/dotnet35)
+horizon_help_desk: true
+horizon_print_redir: false
+horizon_psg: true
+horizon_url_filtering: false
+
+# ---- Dynamic Environment Manager ----
+dem_agent_installer: "/mnt/wdnfs/Ansible/dem/CHANGEME-dem-agent-installer.msi"
+dem_flex_engine: true
+dem_flex_migrate: false
+dem_self_support: true
+dem_mgmt_console: false
+dem_integration_enabled: false
+dem_noad_config: ""
+dem_comp_env_config: ""
+
+# ---- App Volumes ----
+appvolumes_agent_installer: "/mnt/wdnfs/Ansible/appvolumes/CHANGEME-appvolumes-agent-installer.msi"
+appvolumes_manager: "appvol.example.com"
+appvolumes_port: 443
+appvolumes_ssl_validation: 1
+
+# ---- Publish (scripts/publish_to_pool.sh); password: vault_horizon_api_password ----
+horizon_connection_server: "cs-srv-01.example.com"
+horizon_pool_name: "CHANGEME-pool-name"
+horizon_api_username: "CHANGEME-api-username"
+horizon_api_domain: "example.com"

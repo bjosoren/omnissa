@@ -1,0 +1,25 @@
+# Copy to w11_24h2_tpl.local.yml (gitignored) and fill in real values. Loaded
+# last, so anything here overrides the committed w11_24h2_tpl*.yml files.
+# Only include the keys you need.
+
+guest_ip_cidr: "203.0.113.180/24"
+guest_gateway: "203.0.113.1"
+guest_dns_servers:
+  - "203.0.113.11"
+  - "203.0.113.20"
+mac_address: "00:50:56:00:xx:xx"      # for a DHCP reservation; omit to auto-assign
+
+vcenter_cluster: "REPLACE-ME"
+vcenter_datastore: "REPLACE-ME"
+vcenter_folder: "REPLACE-ME"          # e.g. "EUC/Desktops/HZ-Templates"
+vcenter_network: "REPLACE-ME"
+# remote_cache_datastore: "REPLACE-ME"  # pin where the ISO is cached
+
+horizon_agent_installer: "/mnt/wdnfs/Ansible/horizon/REPLACE-ME.exe"
+dem_agent_installer: "/mnt/wdnfs/Ansible/dem/REPLACE-ME.msi"
+appvolumes_agent_installer: "/mnt/wdnfs/Ansible/appvolumes/REPLACE-ME.msi"
+osot_installer: "/mnt/wdnfs/Ansible/osot/REPLACE-ME.exe"
+osot_finalize_sdelete64_installer: "/mnt/wdnfs/Ansible/osot/REPLACE-ME.exe"
+
+horizon_pool_name: "REPLACE-ME"
+horizon_api_username: "REPLACE-ME"

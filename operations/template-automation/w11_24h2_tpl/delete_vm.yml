@@ -1,0 +1,18 @@
+---
+# Deletes a VM by name - used by scripts/build.sh for the build VM.
+- name: Delete a VM by name
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Power off and delete {{ vm_name }}
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_server }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: false
+        datacenter: "{{ vcenter_datacenter }}"
+        folder: "/{{ vcenter_datacenter }}/vm/{{ vcenter_folder }}"
+        name: "{{ vm_name }}"
+        state: absent
+        force: true

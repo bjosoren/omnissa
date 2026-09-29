@@ -1,0 +1,63 @@
+---
+# Lets Ansible resolve group_vars + vault (Jinja and all) into one JSON file
+# (mode 0600) for scripts/build.sh; build.sh shreds it once Packer has its
+# PKR_VAR_* values. `hosts:` must match an [w11_24h2_tpl] group in hosts.ini.
+- name: Resolve platform + image vars for scripts/build.sh
+  hosts: w11_24h2_tpl
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Write resolved vars to a local, root-only JSON file
+      ansible.builtin.copy:
+        dest: "{{ playbook_dir }}/.packer_vars.json"
+        mode: "0600"
+        content: >-
+          {{ {
+            'vcenter_server': vcenter_server,
+            'vcenter_username': vcenter_username,
+            'vcenter_password': vcenter_password,
+            'vcenter_datacenter': vcenter_datacenter,
+            'vcenter_cluster': vcenter_cluster,
+            'vcenter_host': vcenter_host | default(''),
+            'vcenter_datastore': vcenter_datastore,
+            'vcenter_folder': vcenter_folder,
+            'vcenter_network': vcenter_network,
+            'vm_cpu_count': vm_cpu_count,
+            'vm_cores_per_socket': vm_cores_per_socket,
+            'vm_mem_size_mb': vm_mem_size_mb,
+            'vm_disk_size_mb': vm_disk_size_mb,
+            'vm_guest_os_type': vm_guest_os_type,
+            'vm_version': vm_version,
+            'vm_secure_boot': vm_secure_boot | default(true) | bool,
+            'vm_advanced_settings': vm_advanced_settings | default({}),
+            'iso_paths': iso_paths,
+            'win_iso_url': win_iso_url | default(''),
+            'win_iso_checksum': win_iso_checksum | default('none'),
+            'remote_cache_datastore': remote_cache_datastore | default(''),
+            'remote_cache_path': remote_cache_path | default('packer_cache'),
+            'guest_hostname': guest_hostname,
+            'guest_ip_cidr': guest_ip_cidr | default(''),
+            'guest_gateway': guest_gateway | default(''),
+            'guest_dns_servers': guest_dns_servers | default([]),
+            'mac_address': mac_address | default(''),
+            'domain_fqdn': domain_fqdn,
+            'timezone': timezone,
+            'win_language': win_language,
+            'win_keyboard': win_keyboard,
+            'win_image_name': win_image_name,
+            'win_kms_key': win_kms_key,
+            'win_full_name': win_full_name,
+            'win_org_name': win_org_name,
+            'winrm_port': winrm_port,
+            'horizon_agent_installer': horizon_agent_installer,
+            'dem_agent_installer': dem_agent_installer,
+            'appvolumes_agent_installer': appvolumes_agent_installer,
+            'appvolumes_manager': appvolumes_manager,
+            'vault_win_admin_password': vault_win_admin_password,
+            'horizon_connection_server': horizon_connection_server | default(''),
+            'horizon_pool_name': horizon_pool_name | default(''),
+            'horizon_farm_name': horizon_farm_name | default(''),
+            'horizon_api_username': horizon_api_username | default(''),
+            'horizon_api_domain': horizon_api_domain | default(''),
+            'vault_horizon_api_password': vault_horizon_api_password | default(''),
+          } | to_nice_json }}

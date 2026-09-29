@@ -1,0 +1,57 @@
+---
+# .NET Framework 3.5 (NetFx3) from the install ISO's sources\sxs - Windows 11
+# uses win_optional_feature (win_feature is Server-only). Also checks the
+# inbox .NET 4.x is 4.6.2+, which Horizon Agent's PerfTracker needs.
+- name: Confirm no pending reboot before this phase
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/wait_for_no_pending_reboot.yml"
+
+- name: Locate Windows 11 install media (for NetFx3 source)
+  ansible.windows.win_shell: |
+    $drive = Get-WmiObject Win32_CDROMDrive |
+        Where-Object { Test-Path ($_.Drive + '\sources\sxs') } |
+        Select-Object -First 1 -ExpandProperty Drive
+    if (-not $drive) {
+      throw "Could not find a mounted CD-ROM with sources\sxs - is the Windows 11 install ISO still attached?"
+    }
+    Write-Output $drive
+  register: install_media
+  changed_when: false
+
+- name: Enable .NET Framework 3.5 (NetFx3)
+  ansible.windows.win_optional_feature:
+    name: NetFx3
+    state: present
+    include_parent: true
+    source: "{{ install_media.stdout | trim }}\\sources\\sxs"
+  register: netfx3_install
+
+- name: Show NetFx3 install result
+  ansible.builtin.debug:
+    msg: "Reboot required after NetFx3 install: {{ netfx3_install.reboot_required }}"
+
+- name: Reboot after NetFx3 installation
+  ansible.windows.win_reboot:
+    reboot_timeout: 1800
+    post_reboot_delay: 60
+    msg: "Rebooting after NetFx3 installation"
+  when: netfx3_install.reboot_required
+
+- name: Verify .NET 4.6.2+ is present (Horizon Agent PerfTracker prerequisite)
+  ansible.windows.win_shell: |
+    $release = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full" -ErrorAction SilentlyContinue).Release
+    if (-not $release) {
+      throw ".NET v4 Full registry key not found"
+    } elseif ($release -ge 394802) {
+      Write-Output ".NET OK - release key $release (4.6.2+)"
+    } else {
+      throw ".NET release key $release is below 4.6.2 (394802) - PerfTracker will fail to install"
+    }
+  register: dotnet_verify
+  changed_when: false
+
+- name: Show .NET verification result
+  ansible.builtin.debug:
+    msg: "{{ dotnet_verify.stdout }}"
+
+- name: Log phase completion
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/log_phase_complete.yml"

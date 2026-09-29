@@ -1,0 +1,56 @@
+---
+# OSOT Finalize, first pass: osot_finalize_cleanup_job_numbers (0-7, disk/
+# profile/log cleanup). Job 7 runs SDelete64 to zero free space; the role
+# waits for that process to exit before continuing.
+- name: Ensure OSOT is present on VM (idempotent copy)
+  ansible.windows.win_copy:
+    src: "{{ osot_installer }}"
+    dest: "C:\\Temp\\{{ osot_installer | basename }}"
+
+- name: Stage SDelete64.exe into Windows\System32 (required for Finalize job 7)
+  ansible.windows.win_copy:
+    src: "{{ osot_finalize_sdelete64_installer }}"
+    dest: "C:\\Windows\\System32\\{{ osot_finalize_sdelete64_installer | basename }}"
+
+- name: Run OSOT Finalize pass (cleanup jobs 0-7)
+  ansible.windows.win_shell: |
+    & "C:\Temp\{{ osot_installer | basename }}" -f {{ osot_finalize_cleanup_job_numbers }}
+    if ($LASTEXITCODE -ne 0) { throw "OSOT Finalize (cleanup) exited with code $LASTEXITCODE" }
+  register: osot_finalize_cleanup_result
+  changed_when: true
+
+- name: Show OSOT Finalize (cleanup) output
+  ansible.builtin.debug:
+    msg: "{{ osot_finalize_cleanup_result.stdout_lines | default([]) }}"
+
+- name: Wait for SDelete64.exe to finish before continuing (do not proceed to OSOT Finalize part 2 / hardening / cleanup while it's still running)
+  ansible.windows.win_shell: |
+    if (Get-Process -Name 'sdelete64' -ErrorAction SilentlyContinue) { "RUNNING" } else { "DONE" }
+  register: sdelete64_poll
+  until: (sdelete64_poll.stdout | trim) == 'DONE'
+  retries: 480
+  delay: 30
+  changed_when: false
+
+- name: Confirm SDelete64.exe has finished
+  ansible.builtin.debug:
+    msg: "SDelete64.exe is no longer running - safe to proceed to OSOT Finalize part 2 / hardening / cleanup."
+
+- name: Copy OSOT's own Finalize (cleanup pass) log into build_log_dir
+  ansible.windows.win_shell: |
+    $src = Get-ChildItem -Path "C:\ProgramData\Omnissa\Omnissa OS Optimization Tool\Log" -Filter "Finalize_*.log" -ErrorAction SilentlyContinue |
+      Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($src) {
+      Copy-Item -Path $src.FullName -Destination "{{ build_log_dir }}\osot_finalize_cleanup_report.log" -Force
+      Write-Host "Copied $($src.FullName) to {{ build_log_dir }}\osot_finalize_cleanup_report.log"
+    } else {
+      Write-Host "No Finalize_*.log found under OSOT's own log folder - filename pattern may differ, nothing to copy."
+    }
+  when: build_log_enabled | default(true) | bool
+  ignore_errors: true
+
+- name: Pause for log verification
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/pause_for_log_verification.yml"
+
+- name: Log phase completion
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/log_phase_complete.yml"

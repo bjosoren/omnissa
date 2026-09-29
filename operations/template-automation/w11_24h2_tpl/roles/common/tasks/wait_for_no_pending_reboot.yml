@@ -1,0 +1,24 @@
+---
+# Imported as the first task of each role: reboots (up to 4 rounds) until no
+# reboot is pending, so a phase never starts on half-finished servicing.
+- name: "Reset the pending-reboot round tracker"
+  ansible.builtin.set_fact:
+    _wfnpr_pending: true
+
+- name: "{{ wait_for_no_pending_reboot_label | default('Confirm no pending reboot before this phase') }}"
+  ansible.builtin.include_tasks: _wait_for_no_pending_reboot_round.yml
+  loop: "{{ range(1, (wait_for_no_pending_reboot_max_rounds | default(4)) + 1) | list }}"
+  loop_control:
+    loop_var: _wfnpr_round
+  when: _wfnpr_pending | bool
+
+- name: "Fail if a reboot is still pending after {{ wait_for_no_pending_reboot_max_rounds | default(4) }} rounds"
+  ansible.builtin.fail:
+    msg: >-
+      Still shows a pending reboot after
+      {{ wait_for_no_pending_reboot_max_rounds | default(4) }} rounds of
+      checking/rebooting, before this phase could start - something is
+      genuinely stuck rather than just multi-wave servicing/AppX
+      provisioning settling. Console into the VM and check CBS.log /
+      TiWorker.exe by hand before re-running.
+  when: _wfnpr_pending | bool

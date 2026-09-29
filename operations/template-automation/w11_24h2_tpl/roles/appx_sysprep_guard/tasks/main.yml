@@ -1,0 +1,45 @@
+---
+# Windows 11 only. Sysprep /generalize fails if a Store app is installed for
+# a user but not provisioned for all users (SYSPREP_APPX). Turns off Store
+# auto-updates and removes such packages before osot_generalize.
+- name: Confirm no pending reboot before this phase
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/wait_for_no_pending_reboot.yml"
+
+- name: Turn off Microsoft Store automatic app updates (policy)
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\WindowsStore
+    name: AutoDownload
+    data: 2
+    type: dword
+
+- name: Remove Appx packages installed for this user but not provisioned for all users
+  ansible.windows.win_shell: |
+    $log = '{{ build_log_dir }}\appx_sysprep_guard.log'
+    $provisioned = (Get-AppxProvisionedPackage -Online).DisplayName
+    $candidates = Get-AppxPackage |
+        Where-Object { -not $_.IsFramework -and $_.SignatureKind -ne 'System' -and
+                       $_.NonRemovable -ne $true -and $provisioned -notcontains $_.Name }
+    $removed = @()
+    foreach ($p in $candidates) {
+      try {
+        Remove-AppxPackage -Package $p.PackageFullName -ErrorAction Stop
+        $removed += $p.PackageFullName
+      } catch {
+        $removed += "FAILED: $($p.PackageFullName) - $($_.Exception.Message)"
+      }
+    }
+    $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    if ({{ build_log_enabled | bool | ternary('$true', '$false') }}) {
+      Add-Content -Path $log -Value "[$stamp] removed $($removed.Count) package(s)"
+      $removed | ForEach-Object { Add-Content -Path $log -Value "  $_" }
+    }
+    if ($removed.Count -eq 0) { Write-Output "NONE" } else { $removed | ForEach-Object { Write-Output $_ } }
+  register: appx_guard
+  changed_when: "'NONE' not in appx_guard.stdout_lines"
+
+- name: Show Appx guard result
+  ansible.builtin.debug:
+    msg: "{{ appx_guard.stdout_lines }}"
+
+- name: Log phase completion
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/log_phase_complete.yml"

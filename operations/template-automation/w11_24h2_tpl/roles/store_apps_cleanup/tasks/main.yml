@@ -1,0 +1,21 @@
+---
+# Removes store_apps_to_remove for all users and from the provisioned set, so
+# new profiles don't get them back.
+- name: Confirm no pending reboot before this phase
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/wait_for_no_pending_reboot.yml"
+- name: Remove unwanted Store apps (AllUsers + provisioned, so new profiles don't get them back)
+  ansible.windows.win_shell: |
+    $apps = @({{ store_apps_to_remove | default(['Microsoft.Copilot', 'Microsoft.BingSearch']) | map('regex_replace', "'", "''") | map('regex_replace', '^(.*)$', "'\\1'") | join(', ') }})
+    foreach ($app in $apps) {
+      Get-AppxPackage -AllUsers -Name $app -ErrorAction SilentlyContinue | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue
+      Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -eq $app } | Remove-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue
+    }
+  register: store_apps_cleanup_result
+  changed_when: true
+
+- name: Show Store app cleanup output
+  ansible.builtin.debug:
+    msg: "{{ store_apps_cleanup_result.stdout_lines | default([]) }}"
+
+- name: Log phase completion
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/log_phase_complete.yml"
