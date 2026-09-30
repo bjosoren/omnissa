@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
 # scripts/sync_to_repo.sh - copy ~/golden-images into the clean git clone
-# (~/omnissa-repo-clean) without site-specific data. Never commits or pushes.
+# (~/omnissa-repo, the sparse clone from the platform post) without site-specific data. Never commits or pushes.
 #
 #   scripts/sync_to_repo.sh [image_key ...]          dry run (default image: w11_24h2_tpl)
 #   scripts/sync_to_repo.sh --apply [image_key ...]  copy, only if the leak scan is clean
 #
 # Copies images/<key>/, inventory/group_vars/<key>*.yml (+ .local.yml.example),
-# scripts/*.sh|*.py and ansible.cfg. Never copies *.local.yml, hosts.ini (the
-# repo keeps TEST-NET placeholders), the vault, configs/, logs, build output
-# or installers. The leak scan blocks on private IPs in values, pinned VMware
+# scripts/*.sh|*.py and ansible.cfg. Never copies *.local.yml, hosts.ini,
+# all.yml or the vault (the repo only has their *.example templates),
+# configs/, logs, build output or installers. A new image gets a placeholder
+# group in the repo's hosts.ini.example. The leak scan blocks on private IPs in values, pinned VMware
 # MACs, private keys, plaintext secrets and any regex listed in
 # ~/.sync_to_repo.patterns (your domain/lab names - kept outside the repo).
 set -euo pipefail
 
 SRC="${SRC:-$HOME/golden-images}"
-REPO="${REPO:-$HOME/omnissa-repo-clean}"
+REPO="${REPO:-$HOME/omnissa-repo}"
 DST="$REPO/operations/template-automation"
 
 PATTERNS_FILE="${PATTERNS_FILE:-$HOME/.sync_to_repo.patterns}"
@@ -178,13 +179,13 @@ while IFS='|' read -r s d; do
   cp -p "$s" "$d"
 done < "$LIST"
 
-REPO_HOSTS="$DST/automation-platform/inventory/hosts.ini"
+REPO_HOSTS="$DST/automation-platform/inventory/hosts.ini.example"
 n=180
 for key in "${KEYS[@]}"; do
   if ! grep -q "^\[$key\]" "$REPO_HOSTS"; then
     while grep -q "198\.51\.100\.$n\b" "$REPO_HOSTS"; do n=$((n+1)); done
     printf '\n[%s]\n%s ansible_host=198.51.100.%s\n' "$key" "$key" "$n" >> "$REPO_HOSTS"
-    echo "==> Added [$key] to repo hosts.ini with placeholder 198.51.100.$n (TEST-NET-2)"
+    echo "==> Added [$key] to repo hosts.ini.example with placeholder 198.51.100.$n (TEST-NET-2)"
   fi
 done
 

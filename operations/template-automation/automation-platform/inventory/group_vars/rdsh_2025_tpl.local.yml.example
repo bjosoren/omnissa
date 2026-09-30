@@ -64,3 +64,8 @@ osot_finalize_sdelete64_installer: "/mnt/wdnfs/Ansible/osot/REPLACE-ME.exe"
 # Real Horizon farm name and API username used by scripts/publish_to_pool.sh.
 horizon_farm_name: "REPLACE-ME"       # <- REPLACE with your real farm name
 horizon_api_username: "REPLACE-ME"    # <- REPLACE with your real API username
+
+# ---- Connection Server / App Volumes Manager (committed defaults are example.com)
+horizon_connection_server: "REPLACE-ME.example.com"
+horizon_api_domain: "example.com"
+appvolumes_manager: "REPLACE-ME.example.com"

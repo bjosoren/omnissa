@@ -60,7 +60,7 @@ appvolumes_ssl_validation: 1
 # Fixed 2026-09-10: publish_to_pool.sh used to be hardcoded to
 # ubt_2404_tpl's image dir/group_vars and only knew the desktop-pool REST
 # workflow - a real run against an rdsh_2025_tpl build silently resolved
-# ubt_2404_tpl's vars and almost pushed onto HZUBTP1_ref (caught by that
+# ubt_2404_tpl's vars and almost pushed onto the Ubuntu reference pool (caught by that
 # script's own confirmation prompt, nothing was pushed). publish_to_pool.sh
 # is now parameterized by image_key and reads horizon_farm_name (this
 # image) vs. horizon_pool_name (ubt_2404_tpl) to pick the right REST

@@ -23,3 +23,8 @@ osot_finalize_sdelete64_installer: "/mnt/wdnfs/Ansible/osot/REPLACE-ME.exe"
 
 horizon_pool_name: "REPLACE-ME"
 horizon_api_username: "REPLACE-ME"
+
+# ---- Connection Server / App Volumes Manager (committed defaults are example.com)
+horizon_connection_server: "REPLACE-ME.example.com"
+horizon_api_domain: "example.com"
+appvolumes_manager: "REPLACE-ME.example.com"

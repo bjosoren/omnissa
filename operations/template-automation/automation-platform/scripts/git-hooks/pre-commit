@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# scripts/git-hooks/pre-commit - refuse commits that would publish site data.
+# Install once in the clean clone (path is relative to the repo root):
+#   git config core.hooksPath operations/template-automation/automation-platform/scripts/git-hooks
+# Checks only what this commit ADDS (staged, added lines), so older text in
+# untouched files never blocks you. Bypass for a deliberate exception:
+#   git commit --no-verify
+set -euo pipefail
+
+PATTERNS_FILE="${PATTERNS_FILE:-$HOME/.sync_to_repo.patterns}"
+SITE=""
+[ -f "$PATTERNS_FILE" ] && SITE="$(grep -v '^[[:space:]]*\(#\|$\)' "$PATTERNS_FILE" | paste -sd'|' -)"
+
+git diff --cached --name-only --diff-filter=ACMR -z > "${TMPDIR:-/tmp}/.precommit_files.$$"
+git diff --cached -U0 --diff-filter=ACMR > "${TMPDIR:-/tmp}/.precommit_diff.$$"
+trap 'rm -f "${TMPDIR:-/tmp}/.precommit_files.$$" "${TMPDIR:-/tmp}/.precommit_diff.$$"' EXIT
+
+python3 - "${TMPDIR:-/tmp}/.precommit_files.$$" "${TMPDIR:-/tmp}/.precommit_diff.$$" "$SITE" <<'PY'
+import re, sys
+files_path, diff_path, site = sys.argv[1:4]
+files = [f for f in open(files_path, 'rb').read().decode().split('\0') if f]
+
+# 1. Files that must never be committed, whatever they contain.
+forbidden = re.compile(r'(^|/)(hosts\.ini|all\.yml|vault\.yml)$|\.local\.yml$|(^|/)(logs|build_logs|configs)/|\.packer_vars\.json$|\.(iso|exe|msi|zip)$')
+bad_files = [f for f in files if forbidden.search(f) and not f.endswith('.example')]
+
+# 2. Added lines that look like site data.
+priv = re.compile(r'\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})\b')
+mac = re.compile(r'\b00:50:56:[0-3][0-9a-f]:[0-9a-f]{2}:[0-9a-f]{2}\b', re.I)
+key = re.compile(r'-----BEGIN [A-Z ]*PRIVATE KEY-----')
+site_re = re.compile(site, re.I) if site else None
+hits, cur, ln = [], None, 0
+for line in open(diff_path, encoding='utf-8', errors='replace'):
+    if line.startswith('+++ '):
+        cur = line[6:].strip() if line.startswith('+++ b/') else None
+    elif line.startswith('@@'):
+        m = re.search(r'\+(\d+)', line); ln = int(m.group(1)) if m else 0
+    elif line.startswith('+') and cur:
+        text = line[1:].rstrip('\n')
+        why = []
+        if priv.search(text): why.append('private IP')
+        if mac.search(text): why.append('pinned VMware MAC')
+        if key.search(text): why.append('private key')
+        if site_re and site_re.search(text): why.append('site name')
+        if why:
+            hits.append(f'  {cur}:{ln}: [{", ".join(why)}] {text.strip()[:100]}')
+        ln += 1
+if bad_files or hits:
+    print('pre-commit: refusing to commit possible site-specific data.\n')
+    for f in bad_files:
+        print(f'  {f}: this file belongs on the control node only - commit {f}.example instead')
+    print('\n'.join(hits))
+    print('\nMove real values into <image>.local.yml (gitignored) or use TEST-NET/example.com placeholders.')
+    print('Deliberate exception: git commit --no-verify')
+    sys.exit(1)
+PY

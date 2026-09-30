@@ -68,8 +68,8 @@
 # leaf -> root). Deriving it here keeps computer_ou_dn the single source of
 # truth instead of needing two differently-formatted copies of the same OU
 # path kept in sync by hand. Confirmed against this exact live domain during
-# debugging: OU=HZUBTP1,OU=Computers,OU=Horizon,OU=Virtual,OU=EUC,DC=... ->
-# EUC/Virtual/Horizon/Computers/HZUBTP1.
+# debugging: OU=POOL1,OU=Computers,OU=Horizon,OU=VDI,OU=Corp,DC=... ->
+# Corp/VDI/Horizon/Computers/POOL1.
 - name: Compute the createcomputer= OU path from computer_ou_dn
   ansible.builtin.set_fact:
     net_ads_createcomputer: >-
@@ -161,10 +161,10 @@
   # -o ldif-wrap=no: without this, ldapsearch's LDIF output folds any line
   # over ~76 columns onto a continuation line (a single leading space, per
   # RFC 2849) - confirmed live: this domain's real OU depth ("CN=<host>,
-  # OU=HZUBTP1,OU=Computers,OU=Horizon,OU=Virtual,OU=EUC,DC=ad,DC=admin,
+  # OU=POOL1,OU=Computers,OU=Horizon,OU=VDI,OU=Corp,DC=ad,DC=corp,
   # DC=example,DC=com") is long enough to wrap, silently truncating the dn:
   # value the delete task below extracts to just its first physical line
-  # ("...OU=EUC,DC=ad", missing everything after) - ldapdelete then fails on
+  # ("...OU=Corp,DC=ad", missing everything after) - ldapdelete then fails on
   # that truncated DN with an LDAP referral, not an obviously-DN-related
   # error. This flag disables wrapping outright rather than teaching the
   # extraction below to reassemble folded continuation lines.

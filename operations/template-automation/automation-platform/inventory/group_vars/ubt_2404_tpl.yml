@@ -1,4 +1,10 @@
 # inventory/group_vars/ubt_2404_tpl.yml
+# Generic defaults for this image. Every CHANGEME value below is a placeholder:
+# put your real values in ubt_2404_tpl.local.yml (gitignored, same folder,
+# start from ubt_2404_tpl.local.yml.example) - it is loaded last and wins.
+# Do not edit the placeholders here; the next sync from GitHub would put
+# them back.
+#
 # Add this file to your existing ~/golden-images/inventory/group_vars/ alongside
 # all.yml - it holds this one project's non-secret vars, per the platform post's
 # "each project gets its own group_vars file" convention. Nothing here is
@@ -6,10 +12,10 @@
 # inventory/group_vars/all/vault.yml.
 
 # ---- Placement ----
-vcenter_cluster: GPU-01          # <- your cluster
-vcenter_datastore: gpu-esxi01_VMFS2        # <- your datastore
-vcenter_folder: HZ-Templates        # <- your vCenter VM folder for these builds
-vcenter_network: "vlan12_vdi"        # <- the port group the template builds on
+vcenter_cluster: "CHANGEME-cluster"           # <- placeholder - real value goes in ubt_2404_tpl.local.yml
+vcenter_datastore: "CHANGEME-datastore"       # <- placeholder
+vcenter_folder: "CHANGEME-folder"             # <- placeholder (nested path allowed, e.g. "EUC/Desktops/Templates")
+vcenter_network: "CHANGEME-portgroup"         # <- placeholder
 
 # ---- Sizing ----
 vm_cpu_count: 2
@@ -23,7 +29,7 @@ vm_disk_size_mb: 65536
 # Datastore syntax: "[datastore_name] path/to/file.iso"
 # Content library syntax: "LibraryName/ItemName/file.iso"
 iso_paths:
-  - "[gpu-esxi01_VMFS2] ISO/ubuntu-24.04.3-desktop-amd64.iso"
+  - "[CHANGEME-datastore] ISO/ubuntu-24.04.3-desktop-amd64.iso"   # <- placeholder datastore
 
 # ---- Guest network ----
 # Reserve this address ahead of time (DHCP reservation + DNS A record) per
@@ -50,10 +56,10 @@ guest_dns_servers:
 # refuse to power the VM on) and must not collide with anything else on
 # this vCenter - check before you commit to one. Leave as "" to go back to
 # auto-assignment.
-mac_address: "00:50:56:00:12:34"     # <- REPLACE with your own unique MAC, then create the DHCP reservation for it
+mac_address: ""     # "" = auto-assign; a pinned MAC for a DHCP reservation goes in ubt_2404_tpl.local.yml
 
 # ---- Horizon pool specifics ----
-computer_ou_dn: "OU=HZUBTP1,OU=Computers,OU=Horizon,OU=Virtual,OU=EUC,DC=ad,DC=admin,DC=example,DC=com"
+computer_ou_dn: "OU=CHANGEME,DC=example,DC=com"   # <- placeholder
 
 # The domain's short/NetBIOS (pre-Windows 2000) name - a separate AD
 # attribute an admin can set independently of the DNS domain name above, so
@@ -71,14 +77,14 @@ computer_ou_dn: "OU=HZUBTP1,OU=Computers,OU=Horizon,OU=Virtual,OU=EUC,DC=ad,DC=a
 # starting with "ad." (example.com) too. Worth confirming with the
 # net ads lookup command above if you're not the one who originally set up
 # this domain, but this is Samba telling you its own answer, not a guess.
-domain_netbios_name: "AD"
+domain_netbios_name: "CHANGEME"     # <- placeholder - see the comment above for how to find yours
 
-linux_login_group: GU_HZ_HZUBTP1
+linux_login_group: "CHANGEME-login-group"     # <- placeholder
 
 # Non-secret half of the AD domain-join account from the platform post's
 # "Credentials the platform needs" section - the password half is
 # vault_linux_domain_join_password, already in inventory/group_vars/all/vault.yml.
-linux_domain_join_username: "svc_lnx_adjoin@example.com"
+linux_domain_join_username: "CHANGEME@example.com"     # <- placeholder
 
 # Before joining, the domain_join role checks computer_ou_dn for a leftover
 # computer object matching guest_hostname and deletes it if found - same
@@ -104,18 +110,18 @@ horizon_agent_tarball: "/mnt/wdnfs/Ansible/horizon/Omnissa-horizonagent-linux-x8
 
 # ---- NFS home directories ----
 nfs_server: nfs01.example.com
-nfs_export_path: /srv/home/hzubtp1
+nfs_export_path: /srv/home/CHANGEME     # <- placeholder
 
 # ---- Horizon pool publish (scripts/publish_to_pool.sh) ----
 # scripts/build.sh now calls publish_to_pool.sh itself at the end of a
 # successful build (see build.sh's own comments), so - unlike when this was
 # a separate, manually-run step - a missing or wrong value here CAN break a
-# normal build.sh run, right at the very last step. horizon_pool_name is
-# HZUBTP1_ref: a separate reference/staging pool (Machine Source: vCenter
+# normal build.sh run, right at the very last step. horizon_pool_name can be
+# a separate reference/staging pool (Machine Source: vCenter
 # instant clone, currently disabled in Horizon Console), not the live
-# HZUBTP1 production pool named elsewhere in this project and its blog post
+# production pool
 # - new images land here first for validation before anyone points the real
-# HZUBTP1 pool at them. The rest of these identify the Connection Server and
+# production pool at them. The rest of these identify the Connection Server and
 # the account it authenticates the REST API calls as - see that script's own
 # header comment for what it needs from this account (a Horizon
 # administrator role covers it; it does not need to be an AD domain admin or
@@ -124,8 +130,8 @@ nfs_export_path: /srv/home/hzubtp1
 #horizon_api_username: "svc_hz_api"        # <- REPLACE with your Horizon REST API account
 #horizon_api_domain: "CHANGEME.example.com"     # <- REPLACE with the AD domain that account authenticates against
 horizon_connection_server: "cs-srv-01.example.com"
-horizon_pool_name: HZUBTP1_ref
-horizon_api_username: "hz_admin"
+horizon_pool_name: "CHANGEME-pool-name"     # <- placeholder
+horizon_api_username: "CHANGEME-api-username"     # <- placeholder
 horizon_api_domain: "example.com"
 # The password half - vault_horizon_api_password - goes in
 # inventory/group_vars/all/vault.yml, same as vault_linux_domain_join_password

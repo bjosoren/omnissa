@@ -39,7 +39,7 @@
     # own this doesn't actually deliver that: a real build confirmed the
     # clone still came up with the exact same MAC as vm_name, address type
     # "Manual" (Edit Settings on the clone showed the pinned
-    # 00:50:56:00:12:34, not auto-generated). Omitting mac_address here only
+    # 00:50:56:00:xx:xx, not auto-generated). Omitting mac_address here only
     # means "don't ask for a SPECIFIC different address" - vSphere clones an
     # adapter whose source is set to Manual by copying its device config
     # verbatim, MAC included, unless something explicitly tells it
@@ -96,7 +96,7 @@
         wait_for_ip_address: false
 
     # Flips the NIC the clone above inherited verbatim from vm_name - same
-    # MAC (mac_address, the pinned 00:50:56:00:12:34), same "Manual"
+    # MAC (mac_address, the pinned 00:50:56:00:xx:xx), same "Manual"
     # address type - to "Automatic" via a single in-place reconfigure of
     # that same device (see set_nic_automatic.py's header for the full
     # story of why this replaced a two-task delete/recreate approach that

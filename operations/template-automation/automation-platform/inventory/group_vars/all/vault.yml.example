@@ -1,0 +1,18 @@
+# inventory/group_vars/all/vault.yml.example
+# PLAINTEXT TEMPLATE - never put real passwords in this file.
+# Copy it, fill in the real values, then encrypt the copy with your own
+# vault password (~/.vault_pass). The copy is gitignored.
+#   cp inventory/group_vars/all/vault.yml.example inventory/group_vars/all/vault.yml
+#   $EDITOR inventory/group_vars/all/vault.yml
+#   ansible-vault encrypt inventory/group_vars/all/vault.yml --vault-password-file ~/.vault_pass
+# Later changes: ansible-vault edit inventory/group_vars/all/vault.yml --vault-password-file ~/.vault_pass
+
+vault_vcenter_username: "svc-packer@example.com"
+vault_vcenter_password: "CHANGEME"
+
+vault_linux_domain_join_password: "CHANGEME"      # Ubuntu images
+vault_windows_domain_join_password: "CHANGEME"    # Windows images
+vault_local_admin_password: "CHANGEME"
+
+vault_win_admin_password: "CHANGEME"              # Windows images: build/WinRM Administrator
+vault_horizon_api_password: "CHANGEME"            # publishing to a Horizon pool/farm

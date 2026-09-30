@@ -1,0 +1,19 @@
+# inventory/hosts.ini.example
+# Copy to hosts.ini (gitignored) on the control node and replace each
+# ansible_host with the IP you reserved for that image's build VM (DHCP
+# reservation or static, plus a DNS A record). One group per image you build;
+# the host alias is simply the group name again. Remove groups you don't use.
+#   cp inventory/hosts.ini.example inventory/hosts.ini
+
+[ubt_2404_tpl]
+ubt_2404_tpl ansible_host=198.51.100.150
+
+[w11_24h2_tpl]
+w11_24h2_tpl ansible_host=198.51.100.180
+
+[rdsh_2025_tpl]
+rdsh_2025_tpl ansible_host=198.51.100.170
+
+[ubt_2404_tpl:vars]
+# the local user the Ubuntu autoinstall creates:
+ansible_user=sysadm

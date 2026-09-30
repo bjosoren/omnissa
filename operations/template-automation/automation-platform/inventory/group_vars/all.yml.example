@@ -1,0 +1,12 @@
+# inventory/group_vars/all.yml.example
+# Copy to all.yml (gitignored) on the control node and fill in your values.
+# Shared by every image; nothing secret here - credentials live in the vault.
+#   cp inventory/group_vars/all.yml.example inventory/group_vars/all.yml
+
+vcenter_server: vc-01.example.com              # <- your vCenter FQDN
+vcenter_username: "{{ vault_vcenter_username }}"
+vcenter_password: "{{ vault_vcenter_password }}"
+vcenter_datacenter: Datacenter                 # <- your datacenter object name
+domain_fqdn: example.com                       # <- your AD DNS domain
+domain_realm: EXAMPLE.COM                      # <- the same, upper case (Kerberos realm)
+ssh_private_key_file: ~/.ssh/golden_image_ed25519

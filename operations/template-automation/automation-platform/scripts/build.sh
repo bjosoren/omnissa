@@ -254,6 +254,23 @@ if [ "$IMAGE_KEY" = "rdsh_2025_tpl" ] || [ "$IMAGE_KEY" = "w11_24h2_tpl" ]; then
   echo "    requests_ntlm is present"
 fi
 
+# Site files live only on the control node - the repo ships *.example templates.
+for f in inventory/hosts.ini inventory/group_vars/all.yml inventory/group_vars/all/vault.yml; do
+  if [ ! -f "$PROJECT_ROOT/$f" ]; then
+    echo "Missing $f - copy $f.example to $f and fill in your values." >&2
+    exit 1
+  fi
+done
+if ! head -c 14 "$PROJECT_ROOT/inventory/group_vars/all/vault.yml" | grep -q '^\$ANSIBLE_VAULT'; then
+  echo "inventory/group_vars/all/vault.yml is not encrypted. Encrypt it first:" >&2
+  echo "    ansible-vault encrypt inventory/group_vars/all/vault.yml --vault-password-file ~/.vault_pass" >&2
+  exit 1
+fi
+if [ ! -f "$PROJECT_ROOT/inventory/group_vars/$IMAGE_KEY.local.yml" ]; then
+  echo "WARNING: no inventory/group_vars/$IMAGE_KEY.local.yml - the build will use the" >&2
+  echo "         committed CHANGEME placeholders. Start from $IMAGE_KEY.local.yml.example." >&2
+fi
+
 echo "==> Resolving platform + image vars via Ansible"
 ansible-playbook \
   --vault-password-file "$VAULT_PASS_FILE" \

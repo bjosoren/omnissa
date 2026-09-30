@@ -3,3 +3,8 @@ build_logs/
 *.log
 *.local.yml
 .packer_vars.json
+# Site files: only on the control node. The repo ships *.example templates.
+automation-platform/inventory/hosts.ini
+automation-platform/inventory/group_vars/all.yml
+automation-platform/inventory/group_vars/all/vault.yml
+automation-platform/configs/

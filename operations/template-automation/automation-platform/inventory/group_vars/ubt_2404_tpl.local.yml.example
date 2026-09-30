@@ -1,0 +1,42 @@
+# inventory/group_vars/ubt_2404_tpl.local.yml.example
+# Copy to ubt_2404_tpl.local.yml (gitignored, same folder) and fill in your
+# real values. Loaded after every committed ubt_2404_tpl*.yml file, so these
+# always win. Only keep the keys you need.
+#   cp ubt_2404_tpl.local.yml.example ubt_2404_tpl.local.yml
+
+# ---- vCenter placement (defaults - the placement picker can override per build)
+vcenter_cluster: "REPLACE-ME"
+vcenter_datastore: "REPLACE-ME"
+vcenter_folder: "REPLACE-ME"            # bare name or nested "Parent/Child" path
+vcenter_network: "REPLACE-ME"           # port group the build VM uses
+
+# ---- Install media (datastore ISO, not NFS)
+iso_paths:
+  - "[REPLACE-ME] ISO/ubuntu-24.04.3-desktop-amd64.iso"
+
+# ---- Guest network (same reserved IP as in hosts.ini)
+guest_ip_cidr: "203.0.113.150/24"
+guest_gateway: "203.0.113.1"
+guest_dns_servers:
+  - "203.0.113.11"
+  - "203.0.113.20"
+mac_address: "00:50:56:00:xx:xx"        # pinned MAC for a DHCP reservation; delete to auto-assign
+
+# ---- Active Directory
+computer_ou_dn: "OU=REPLACE-ME,DC=example,DC=com"
+domain_netbios_name: "REPLACE-ME"       # `net ads lookup -S <dc-ip>` -> "Pre-Win2k Domain"
+linux_login_group: "REPLACE-ME"         # AD group allowed to log in
+linux_domain_join_username: "REPLACE-ME@example.com"
+
+# ---- NFS home directories
+nfs_server: "REPLACE-ME.example.com"
+nfs_export_path: "/srv/home/REPLACE-ME"
+
+# ---- Horizon Agent tarball on the NFS share
+horizon_agent_tarball: "/mnt/wdnfs/Ansible/horizon/REPLACE-ME.tar.gz"
+
+# ---- Horizon publish (scripts/publish_to_pool.sh)
+horizon_connection_server: "REPLACE-ME.example.com"
+horizon_pool_name: "REPLACE-ME"
+horizon_api_username: "REPLACE-ME"
+horizon_api_domain: "example.com"

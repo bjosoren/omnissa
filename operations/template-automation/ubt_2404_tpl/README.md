@@ -57,7 +57,7 @@ bypassing `/etc/hosts` and any local resolver cache - falls back to the
 system resolver with a warning if `dig` isn't installed), then runs
 `packer init` / `packer validate` / `packer build`, and - once Packer confirms
 the VM is powered off - snapshots it as `gi-ubt2404-<YYYYMMDD>`. Point the
-HZUBTP1 desktop pool's snapshot at that name in Horizon Console once it's
+Ubuntu desktop pool's snapshot at that name in Horizon Console once it's
 proven out.
 
 The DNS check exists because Packer's own HCL has no way to run a real

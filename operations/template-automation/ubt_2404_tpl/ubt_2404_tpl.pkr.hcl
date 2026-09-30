@@ -1,5 +1,5 @@
 // ubt_2404_tpl.pkr.hcl
-// Builds the Ubuntu 24.04 LTS Desktop golden image for the HZUBTP1 Omnissa Horizon
+// Builds the Ubuntu 24.04 LTS Desktop golden image for an Omnissa Horizon
 // instant-clone pool: boots the Desktop ISO under vSphere, feeds it an autoinstall
 // answer file over Packer's own HTTP server, then hands off to Ansible for
 // everything in-guest. Mirrors the manual procedure at
