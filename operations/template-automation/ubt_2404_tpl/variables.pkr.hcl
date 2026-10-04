@@ -52,19 +52,6 @@ variable "vcenter_network" {
 # recreate this same-named VM on every run instead of erroring with "<name>
 # already exists, you can use -force flag to destroy it".
 #
-# Reusing one fixed name/identity for the VM this actually builds onto -
-# rather than a fresh timestamped VM every run, as earlier versions of this
-# project did - is what makes mac_address below safe to pin: a real build
-# found that once a prior run's finished VM got published to the Horizon
-# pool, Horizon "locks" it, but it kept holding the SAME pinned MAC/static IP
-# the next build's freshly-installed guest also tried to use - two VMs
-# fighting over one identity on the network, which is what caused that run's
-# SSH-after-reboot failures. scripts/build.sh's post-build step now clones
-# this VM to a separate, freshly timestamped VM (letting vCenter assign IT a
-# new MAC) before snapshotting - that clone is what actually gets published
-# to Horizon, so the pinned identity here only ever lives on this one
-# reusable build VM, never duplicated onto whatever's currently live in the
-# pool.
 variable "vm_name" {
   type = string
 }

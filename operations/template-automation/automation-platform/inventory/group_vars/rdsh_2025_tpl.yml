@@ -4,25 +4,6 @@
 # group_vars file" convention. Nothing here is secret; vault_win_admin_password
 # and vault_horizon_api_password stay in inventory/group_vars/all/vault.yml.
 #
-# RESTRUCTURED 2026-09-18, per the user's explicit request: Horizon Agent /
-# DEM / App Volumes / OSOT settings moved out to their own committed files,
-# so this file stays focused on VM-shape/build and site-specific placement
-# settings:
-#   - rdsh_2025_tpl_agents.yml - Horizon Agent / DEM / App Volumes feature
-#                                toggles, installer-path placeholders, and
-#                                Horizon farm/pool publish settings
-#                                (committed, non-secret)
-#   - rdsh_2025_tpl_osot.yml   - OS Optimization Tool job selection +
-#                                installer-path placeholders (committed,
-#                                non-secret)
-#   - rdsh_2025_tpl.local.yml  - real, site-specific values for every
-#                                CHANGEME-* placeholder across all three
-#                                committed files above (gitignored, never
-#                                committed - see rdsh_2025_tpl.local.yml.example)
-# scripts/build.sh and scripts/publish_to_pool.sh load all of these
-# automatically (see either script's own "Local, untracked overrides"
-# comment) - nothing else to wire up.
-#
 # You need ONE new vault entry for this image that ubt_2404_tpl doesn't have:
 #   ansible-vault edit inventory/group_vars/all/vault.yml
 #   # add: vault_win_admin_password: "<strong password>"
@@ -136,12 +117,6 @@ winrm_port: 5985
 build_log_enabled: true
 build_log_dir: 'C:\ProgramData\Omnissa\Logs'
 
-# ---- Verification toggles ----
-# Added 2026-09-11 so a build can skip specific slow/flaky stages for a
-# quick pipeline-shape verification run, without hand-editing playbook.yml
-# each time - set false here (or pass -e enable_windows_update=false on the
-# packer/ansible command line) instead.
-#
 # enable_windows_update: true by default. Set false to verify the rest of
 # the pipeline (dotnet35 / OSOT Optimize-Generalize-Finalize / store app
 # cleanup / reordering) without sitting through the full looped Windows
@@ -156,15 +131,6 @@ build_log_dir: 'C:\ProgramData\Omnissa\Logs'
 # actually publishing anything built with it off.
 enable_windows_update: true
 
-# osot_generalize_manual_pause: DISABLED 2026-09-16 per the user's explicit
-# request, following this same toggle pattern rather than deleting the
-# pause's code outright - see roles/osot_generalize/tasks/main.yml's own
-# header for why: unlike osot_optimize's earlier pause (fully removed once
-# it was no longer needed), this one is worth being able to bring back for
-# a future build where a manual look before Generalize is wanted again (a
-# new answer file, an OSOT version bump, anything else worth checking
-# before Generalize commits and exits Audit Mode for good). Set true here
-# (or pass -e osot_generalize_manual_pause=true) to re-enable it.
 osot_generalize_manual_pause: false
 
 # ---- Optional extra apps (roles/apps) ----

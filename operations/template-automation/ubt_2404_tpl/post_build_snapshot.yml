@@ -33,32 +33,6 @@
     # future run (see scripts/build.sh). A linked clone would either block
     # that destroy or silently corrupt itself the moment it happened.
     #
-    # No mac_address given in the networks entry below - the intent is the
-    # same as the comment above (let vCenter assign this clone its own
-    # fresh MAC so it never collides with vm_name's pinned one), but on its
-    # own this doesn't actually deliver that: a real build confirmed the
-    # clone still came up with the exact same MAC as vm_name, address type
-    # "Manual" (Edit Settings on the clone showed the pinned
-    # 00:50:56:00:xx:xx, not auto-generated). Omitting mac_address here only
-    # means "don't ask for a SPECIFIC different address" - vSphere clones an
-    # adapter whose source is set to Manual by copying its device config
-    # verbatim, MAC included, unless something explicitly tells it
-    # otherwise (a long-standing, documented behavior - see
-    # github.com/ansible/ansible issue #64774, "vmware_guest clone from
-    # template will keep same MAC as the template"; community.vmware's own
-    # vmware_guest module has no networks-list option to force an adapter
-    # back to auto-generated). The single task below, after the clone, is
-    # the actual fix - see set_nic_automatic.py's own header for why it's a
-    # raw pyVmomi reconfigure rather than another vmware_guest_network call:
-    # an earlier delete-then-recreate version of this fix (two
-    # vmware_guest_network tasks) reported success on every real build but
-    # never actually changed the adapter's address type away from Manual -
-    # confirmed directly via Edit Settings on both the published clone and
-    # every VDI Horizon spawned from it. The one operation confirmed (by a
-    # real manual fix, then reproduced here) to actually work is a single
-    # in-place reconfigure of the SAME device, exactly what vCenter's own
-    # Edit Settings "MAC Address: Automatic" dropdown does.
-    #
     # No `customization:` block here on purpose - this needs to be a
     # byte-for-byte copy of vm_name's guest state (AD-joined machine
     # account and /etc/krb5.keytab, installed Horizon Agent, everything

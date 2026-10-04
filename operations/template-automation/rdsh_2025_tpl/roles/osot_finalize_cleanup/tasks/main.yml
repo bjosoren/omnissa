@@ -1,61 +1,4 @@
 ---
-# roles/osot_finalize_cleanup/tasks/main.yml
-# NEW ROLE 2026-09-16, per the user's explicit request, made while watching a
-# real build's OSOT Finalize pass run near the end of the pipeline: split
-# what used to be ONE OSOT Finalize invocation (roles/osot_finalize, see that
-# role's own header for its pre-split history) into TWO separate passes of
-# the same OmnissaHorizonOSOptimizationTool.exe -f CLI, with different job
-# numbers, run at two different points in the pipeline:
-#
-#   THIS role (osot_finalize_cleanup): jobs 0-7 - the disk/profile/log
-#   housekeeping jobs (NGEN, DISM Side-by-Side cleanup, Compact/CompactOS,
-#   Disk Cleanup, clear event logs, disable Superfetch, clear default user
-#   profile, zero empty disk space) - originally positioned BEFORE
-#   appvolumes in playbook.yml (i.e. before the App Volumes Agent install),
-#   per the user's own explicit instruction, so App Volumes wouldn't start
-#   until the potentially long-running job 7 (SDelete64.exe) had genuinely
-#   finished.
-#
-#   MOVED 2026-09-17, per the user's later explicit request: this role now
-#   runs AFTER appvolumes instead. The overlap concern above doesn't go
-#   away, it just flips - job 7 now zeros whatever free space is left once
-#   App Volumes is already installed, rather than before it - but that's
-#   fine for this role's actual purpose (the image just needs its disk
-#   zeroed by the time capture happens, not before every earlier install
-#   step). The wait-for-SDelete64 gate below now protects
-#   osot_finalize/hardening/cleanup from running while it's still busy,
-#   not appvolumes - see that task's own updated name/comment.
-#
-#   roles/osot_finalize (unchanged name, kept in its existing position after
-#   appvolumes): jobs 9-10 (Clear KMS Settings, Flush DNS cache) - the
-#   network/licensing-identity reset jobs, run LAST, right before
-#   hardening/cleanup/Packer's own shutdown_command - see that role's own
-#   header for why job 9 in particular is a reversal of an earlier explicit
-#   decision, flagged back to the user rather than silently changed. Job 11
-#   ("Release IP Address") was ALSO originally planned for this second pass
-#   but REMOVED the same day, before ever shipping - see that role's own
-#   header for the WinRM ConnectTimeoutError root cause and the Packer
-#   shutdown_command risk that drove the decision to drop it.
-#
-# Job 8 ("Creates local group policies", needs LGPO.exe) stays excluded from
-# BOTH passes, same as before the split - not wanted, not staged, per the
-# user's original 2026-09-11 decision (see inventory/group_vars/
-# rdsh_2025_tpl.yml's own comment on osot_finalize_cleanup_job_numbers /
-# osot_finalize_job_numbers).
-#
-# Why the user wanted this split at all: job 7 ("Zero empty disk space",
-# SDelete64.exe under the hood) can run for a long time on a large/
-# fragmented disk, and the user originally wanted App Volumes installed
-# only once that's genuinely finished - not overlapping with it, and not
-# just trusting this task's own exit as proof it's done (see the dedicated
-# wait-task below, added same request). As of the 2026-09-17 reorder noted
-# above, App Volumes now installs BEFORE this role runs at all, so the
-# wait-task's job is now to keep osot_finalize/hardening/cleanup from
-# starting while job 7 is still busy, not to gate App Volumes. Separately,
-# jobs 9-10 (in the other pass, roles/osot_finalize) are specifically about
-# network identity (DNS) and KMS activation state - things you want reset
-# as the very LAST thing before the image goes cold for cloning, which is
-# still true and unaffected by this reorder.
 - name: Ensure OSOT is present on VM (idempotent copy)
   ansible.windows.win_copy:
     src: "{{ osot_installer }}"
@@ -77,29 +20,6 @@
   ansible.builtin.debug:
     msg: "{{ osot_finalize_cleanup_result.stdout_lines | default([]) }}"
 
-# ADDED 2026-09-16, per the user's own explicit follow-up request ("do not
-# proceed to app volumes if sdelete64.exe is running") - originally gated
-# App Volumes specifically; since the 2026-09-17 reorder above, App Volumes
-# already ran before this role starts, so what this now gates is
-# osot_finalize/hardening/cleanup, the roles that still run after it. This
-# task's own
-# blocking win_shell call above already waits for OmnissaHorizonOSOptimizationTool.exe's
-# OWN process to exit before returning - but OSOT is a closed-source vendor
-# tool, and there's no visibility into whether it genuinely waits on
-# SDelete64.exe as a normal child process, or fires it off as a background/
-# detached process and returns early once it's merely LAUNCHED. Given this
-# pipeline already hit exactly that failure shape once before with
-# roles/osot_optimize's own osot.exe invocation (see that role's own header
-# for the full Job-Object root cause), this doesn't assume OSOT's exit code
-# is sufficient proof SDelete64 actually finished - it verifies the real
-# process state on the guest directly, matching this project's own
-# established "verify real state, don't assume" pattern (same idea as
-# roles/osot_optimize's SessionId/htmlReport checks and roles/vmware_tools'
-# reboot-pending checks).
-#
-# retries: 480 / delay: 30 = 4 hours ceiling - deliberately generous, since
-# the user's own words were "sdelete kan take quite a long time" on this
-# disk. Adjust down if a real run shows it reliably finishes much sooner.
 - name: Wait for SDelete64.exe to finish before continuing (do not proceed to OSOT Finalize part 2 / hardening / cleanup while it's still running)
   ansible.windows.win_shell: |
     if (Get-Process -Name 'sdelete64' -ErrorAction SilentlyContinue) { "RUNNING" } else { "DONE" }
@@ -113,26 +33,6 @@
   ansible.builtin.debug:
     msg: "SDelete64.exe is no longer running - safe to proceed to OSOT Finalize part 2 / hardening / cleanup."
 
-# ADDED 2026-09-20, per the user's explicit request to capture OSOT's own
-# Finalize log into build_log_dir, same pattern as osot_optimize's own
-# "Copy OSOT's own Optimize log into build_log_dir" task. Ref: Omnissa's
-# "Run Windows OS Optimization Tool for Horizon from Command Line"
-# (docs.omnissa.com/Optimizing-Images-for-Horizon/
-# RunWindowsOSOptimizationToolforHorizonfromCommandLine), which documents
-# the -f switch and its job numbers but not a default log filename.
-#
-# FILENAME PATTERN CONFIRMED 2026-09-21 - assumed "Finalize_*.log" by
-# analogy to Optimize_*.log, then verified directly against a real VM's
-# console (user-provided screenshot of C:\ProgramData\Omnissa\Omnissa OS
-# Optimization Tool\Log showing Finalize_20260920121936.log and
-# Finalize_20260920122840.log - two entries, matching this role's own pass
-# and roles/osot_finalize's later pass, exactly as expected). Named
-# osot_finalize_cleanup_report.log (not osot_finalize_report.log) since
-# roles/osot_finalize runs this same -f CLI a second time later in the play
-# for jobs 9-10 - see that role for its own equivalent copy task, once
-# added; "most recent" Sort-Object below correctly picks up only THIS
-# role's own log at the point this task runs, since osot_finalize's own
-# second Finalize_*.log doesn't exist yet.
 - name: Copy OSOT's own Finalize (cleanup pass) log into build_log_dir
   ansible.windows.win_shell: |
     $src = Get-ChildItem -Path "C:\ProgramData\Omnissa\Omnissa OS Optimization Tool\Log" -Filter "Finalize_*.log" -ErrorAction SilentlyContinue |
@@ -146,15 +46,8 @@
   when: build_log_enabled | default(true) | bool
   ignore_errors: true
 
-# ADDED 2026-09-21 - opt-in pause (verify_phase_logs_pause, default false)
-# to confirm the copy above landed in build_log_dir before this role moves
-# on to hardening/osot_finalize/cleanup. See roles/common/tasks/
-# pause_for_log_verification.yml's own header for the full rationale.
 - name: Pause for log verification
   ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/pause_for_log_verification.yml"
 
-# ADDED 2026-09-20 - see roles/common/tasks/log_phase_complete.yml's own
-# header for the full rationale (one running build_phase_log.txt entry per
-# role, imported as every role's LAST task).
 - name: Log phase completion
   ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/log_phase_complete.yml"

@@ -99,21 +99,6 @@ source "vsphere-iso" "ubt_2404_tpl" {
   boot_order = "disk,cdrom"
   boot_wait  = "10s"
 
-  # Packer's default is 100ms between keystroke groups, sent over vSphere's
-  # remote-keystroke API - too fast on this platform: a screenshot from an
-  # earlier attempt caught the linux line mid-type ("...ds=no_") with typing
-  # having visibly stalled, and other attempts landed back on the plain
-  # live-installer GUI with no error, consistent with keystrokes being
-  # dropped rather than the command itself being wrong. Slowing this down is
-  # the officially documented fix ("if you notice missing keys, tune
-  # boot_keygroup_interval") - cheaper and more targeted than adding more
-  # <wait> padding around keystrokes that are already arriving correctly.
-  # Bumped from 500ms to 1000ms after a real build still fell through to the
-  # plain interactive live installer even at 500ms (same silent-seed-URL
-  # symptom, same fix - this is a keystroke-drop issue, not a config bug, so
-  # there's no way to confirm it's fixed for good short of enough repeat runs
-  # never showing it again; if it recurs even at 1000ms, this value is the
-  # first thing to keep raising, not something else to suspect first).
   boot_keygroup_interval = "1000ms"
 
   boot_command = [
@@ -258,7 +243,7 @@ build {
     ansible_env_vars = [
       "ANSIBLE_HOST_KEY_CHECKING=False"
     ]
-    extra_arguments = [
+    extra_arguments = concat([
       # Pull in the shared, non-secret platform vars and the shared vault, plus
       # this project's own non-secret vars, so the playbook sees the exact same
       # vcenter_server/domain_fqdn/computer_ou_dn/vault_linux_domain_join_password/
@@ -267,6 +252,14 @@ build {
       "-e", "@${var.inventory_dir}/group_vars/all.yml",
       "-e", "@${var.inventory_dir}/group_vars/all/vault.yml",
       "-e", "@${var.inventory_dir}/group_vars/ubt_2404_tpl.yml",
+      ],
+      # Site-specific overrides (gitignored), loaded last so they win - the
+      # committed ubt_2404_tpl.yml only holds CHANGEME placeholders for
+      # anything site-specific. Same pattern as the Windows templates.
+      fileexists("${var.inventory_dir}/group_vars/ubt_2404_tpl.local.yml") ? [
+        "-e", "@${var.inventory_dir}/group_vars/ubt_2404_tpl.local.yml",
+      ] : [],
+      [
       "--vault-password-file", "~/.vault_pass",
       # The freshly autoinstalled build_username account isn't NOPASSWD, so
       # every "become: true" task (playbook.yml's very first one is
@@ -276,39 +269,8 @@ build {
       # vcenter_password; it only exists in plaintext for the duration of
       # this one ansible-playbook subprocess, never written to disk.
       "-e", "ansible_become_password=${var.build_password}",
-      # horizon_agent_install_flags is deliberately NOT one of the three
-      # group_vars files above - it's an optional override (default "-A yes"
-      # in variables.pkr.hcl) that scripts/build.sh already resolves via
-      # resolve_vars.yml and exports as PKR_VAR_horizon_agent_install_flags,
-      # same as every other var here. This one just needs its own explicit
-      # -e, same reasoning as ansible_become_password above: it's consumed
-      # by roles/horizon_agent/tasks/main.yml as
-      # {{ horizon_agent_install_flags }}, and Packer variables never
-      # automatically become Ansible variables just because both tools read
-      # the same group_vars files - each one needed here has to be forwarded
-      # explicitly, and this one was missed until a real build finally got
-      # far enough to hit it ("'horizon_agent_install_flags' is undefined").
-      #
-      # This has to be JSON ('{"key": "value"}'), NOT the plain key=value
-      # form used for ansible_become_password above - confirmed the hard way
-      # against a real build. Ansible's plain "-e key=value" syntax doesn't
-      # treat the whole string as one value; it re-splits on whitespace and
-      # rebuilds it as a series of key=value pairs (that's what lets
-      # `-e "a=1 b=2"` set two vars from a single -e). This value's default
-      # is "-A yes" - the one value in this whole file with a space in it -
-      # so the plain form split it into "horizon_agent_install_flags=-A" and
-      # a bare second token "yes" with no "=" in it, which got silently
-      # dropped instead of being glued back onto the value. A live build
-      # confirmed this exactly: install_viewagent.sh ran with argv ending at
-      # bare "-A" (confirmed via /proc/<pid>/cmdline), which is itself a
-      # valid-but-incomplete flag that install_viewagent.sh then sat forever
-      # waiting on stdin to complete interactively - stdin the command
-      # module never feeds, so the task just hangs rather than failing
-      # outright. JSON routes through Ansible's JSON parser instead of the
-      # space-splitting key=value one, so it's immune to this regardless of
-      # what the value's own content is.
       "-e", "{\"horizon_agent_install_flags\": \"${var.horizon_agent_install_flags}\"}",
-    ]
+    ])
   }
 
 }

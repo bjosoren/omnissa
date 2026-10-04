@@ -8,3 +8,15 @@ automation-platform/inventory/hosts.ini
 automation-platform/inventory/group_vars/all.yml
 automation-platform/inventory/group_vars/all/vault.yml
 automation-platform/configs/
+# Backup / editor leftovers
+*.bak*
+*.orig
+*.old
+*.save
+*.pre-*
+*.new-*
+*~
+.*.sw?
+*.rej
+*.tmp
+*.part

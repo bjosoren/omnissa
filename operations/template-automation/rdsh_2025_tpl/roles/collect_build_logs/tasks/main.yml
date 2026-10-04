@@ -1,16 +1,6 @@
 ---
 # roles/collect_build_logs/tasks/main.yml
 #
-# NEW ROLE, ADDED 2026-09-20, per the user's explicit request: zip up every
-# per-component install log this pipeline collects into build_log_dir
-# (C:\ProgramData\Omnissa\Logs - see roles/common/tasks/log_phase_complete.yml
-# and each individual role's own log-copy tasks, e.g. osot_optimize's "Copy
-# OSOT's own Optimize log into build_log_dir") and pull that single zip back
-# to the Ansible control node, so a failed or just-questionable build can be
-# debugged from one downloaded archive instead of consoling/RDPing into a VM
-# that - per playbook.yml's own `cleanup` role, which runs right after this
-# one - is about to have C:\Temp wiped and then be shut down for cloning.
-#
 # Gated by collect_build_logs (default true). scripts/build.sh now asks
 # "Collect install logs for download at the end of this build? [Y/n]" right
 # at the start of the build (before packer init/validate/build even runs),
@@ -72,7 +62,5 @@
     msg: "collect_build_logs is false (declined at scripts/build.sh's start-of-build prompt, or set false in group_vars) - skipped zipping/fetching build_log_dir."
   when: not (collect_build_logs | default(true) | bool)
 
-# ADDED 2026-09-20 - same shared phase-log entry every other role gets (see
-# roles/common/tasks/log_phase_complete.yml's own header).
 - name: Log phase completion
   ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/log_phase_complete.yml"

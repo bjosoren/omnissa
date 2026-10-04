@@ -12,15 +12,6 @@
 # the full Packer/Ansible console output or opening every role's own
 # separate log file under build_log_dir by hand.
 #
-# ADDED 2026-09-20, per the user's explicit request ("can we create a log
-# ..., so that verifying and troubleshooting is easier"), asked right after
-# using osot_generalize's post-Sysprep pause to manually inspect
-# setupact.log/setuperr.log on the console for one specific phase. That
-# was useful but manual and single-purpose; this gives every phase the
-# same kind of at-a-glance record automatically, with no console/RDP
-# session needed just to see how far a build got and roughly how long
-# each phase took.
-#
 # LOCATION: writes to build_log_dir (C:\ProgramData\Omnissa\Logs per
 # inventory/group_vars/rdsh_2025_tpl.yml), NOT C:\Temp - matching
 # roles/base's own "one place to find every component's log" convention

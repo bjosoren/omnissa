@@ -2,17 +2,6 @@
 # roles/enter_audit_mode/tasks/main.yml
 - name: Confirm no pending reboot before this phase
   ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/wait_for_no_pending_reboot.yml"
-# REWRITTEN 2026-09-16: this role no longer ENTERS Audit Mode - it now just
-# VERIFIES the guest is already in it, and fails fast with a clear message
-# if not. Audit Mode entry moved to floppy/autounattend.pkrtpl.hcl itself
-# (Microsoft-Windows-Deployment/Reseal/Mode=Audit in the oobeSystem pass),
-# so the guest is in Audit Mode from its very first boot - before Ansible's
-# own "Gathering Facts" task, let alone this role, ever runs. See that
-# file's own header for the full citations (Omnissa's "Manually creating
-# optimized Windows images for Horizon VMs" PDF, "Enter audit mode" chapter,
-# page 16; Microsoft Learn's "Boot Windows to Audit Mode or OOBE" and
-# "auditSystem" pages) and for exactly what moved where.
-#
 # Why keep this role at all, then, rather than delete it outright: this
 # pipeline's own established pattern is to verify real state rather than
 # assume it (see osot_optimize's own SessionId/htmlReport: checks,
@@ -47,26 +36,6 @@
 # behavior and this pipeline's own prior real-build confirmation), not
 # just that the very first boot landed there.
 #
-# HISTORY of what this role used to do (condensed - full blow-by-blow
-# available in this file's own git history if ever needed): originally
-# entered Audit Mode itself, mid-pipeline, via `sysprep /audit /reboot
-# /unattend:C:\Temp\audit_answer.xml` after a full OOBE-based first boot -
-# added 2026-09-13 so the user could interactively test OSOT at the
-# console before trusting any automated invocation of it (osot_optimize's
-# own -o call was, at the time, an unsolved hang). That approach worked
-# (confirmed on real builds, after several rounds of fixing
-# audit_answer.xml.j2's own AutoLogon/AdministratorPassword pairing - see
-# that file's own final header before deletion), and this role also
-# carried, at various points, up to three separate manual pauses for
-# interactive testing/review, all since removed as osot_optimize's own
-# invocation became a real, evidenced fix rather than a guess (see
-# roles/osot_optimize/tasks/main.yml's own header) and as the pre-Generalize
-# pause in roles/osot_generalize took over that job (see that role's own
-# header). roles/enter_audit_mode/templates/audit_answer.xml.j2 is now
-# DELETED - its proven auditSystem/auditUser content was moved, verbatim,
-# into floppy/autounattend.pkrtpl.hcl instead of being re-derived, since it
-# already did exactly the job this file's own oobeSystem-triggered Audit
-# Mode entry now also needs.
 - name: Verify the VM entered Audit Mode automatically during install
   ansible.windows.win_shell: |
     (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State' -Name ImageState -ErrorAction SilentlyContinue).ImageState

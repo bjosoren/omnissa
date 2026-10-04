@@ -1,12 +1,4 @@
 ---
-# roles/osot_optimize/meta/main.yml
-# allow_duplicates: true - REQUIRED as of 2026-09-17, when this role started
-# being invoked TWICE from playbook.yml's roles: list (pass 1 before
-# osot_generalize, pass 2 after it - see playbook.yml's own comments on each
-# invocation for why: per the user's explicit observation, Sysprep/
-# Generalize reverses some of what the first Optimize pass does, so a
-# second pass re-applies it afterward).
-#
 # Ansible's play-level `roles:` keyword silently DE-DUPLICATES a role
 # invoked more than once with identical parameters within the same play,
 # unless this flag is set - without it, the second `- role: osot_optimize`

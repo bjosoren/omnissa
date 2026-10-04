@@ -48,19 +48,6 @@
 # VDI forked from that - boots with this exact same hardcoded address,
 # guaranteed to collide the moment more than one is live at once.
 #
-# The grep+fail pair below exists because this task can't be verified
-# without a real build (no test environment for this project), and a wrong
-# path here would silently ship a no-op fix rather than an error - cheaper
-# to fail loudly, inside this same build run, the moment the assumption
-# turns out wrong than to discover it later from another live-IP collision.
-# It already caught one wrong guess: 00-installer-config.yaml (subiquity's
-# own installer-time output, and the first guess here) is NOT where this
-# ends up - a real build's grep found /etc/netplan/50-cloud-init.yaml
-# instead, cloud-init's own standard netplan output filename. Makes sense
-# in hindsight: the autoinstall network: key is processed by cloud-init's
-# network-config stage, not written directly by subiquity/curtin the way
-# the apt: preferences.d pin above is - so cloud-init's own renderer, and
-# its own filename convention, is what actually lands on disk.
 - name: Confirm which netplan file currently holds the static build-time config
   ansible.builtin.command: grep -rl "{{ guest_ip_cidr }}" /etc/netplan/
   register: static_netplan_file
@@ -78,30 +65,6 @@
       next task to match before trusting this fix, then re-run.
   when: static_netplan_file.stdout_lines != ['/etc/netplan/50-cloud-init.yaml']
 
-# Overwrites the SAME file autoinstall wrote (see the grep/fail pair above)
-# rather than adding a second netplan file - avoids any ambiguity about
-# which file's dhcp4/addresses keys win for this device. File-only: no
-# `netplan apply`, no interface bounce, no reboot, so the guest's actual
-# running network config - and therefore Packer's live SSH session to it,
-# including its own shutdown_command run right after this - is completely
-# unaffected. Only the NEXT boot (the published clone's first boot, or any
-# Horizon-forked VDI's) picks up this file's new content. renderer:
-# networkd is kept deliberately, matching user-data.pkrtpl.hcl's own
-# reasoning (a real build caught NetworkManager transiently dropping a
-# static profile around the Horizon Agent reboot) - no reason to introduce
-# a second renderer this late for what's now a plain DHCP profile.
-# link-local: [ipv4] is the one key that actually stops this device from
-# getting an fe80:: address on every future boot - added after a real
-# spawned VDI confirmed roles/base's sysctl+flush task (which only ever
-# cleared an address already assigned during THIS build's own boot) does
-# not prevent that VDI's own, independent boot from picking a fresh one
-# right back up. systemd-networkd assigns IPv6 link-local addressing by
-# default regardless of net.ipv6.conf.*.disable_ipv6 - that sysctl affects
-# routable/global addressing, not networkd's own link-local behavior -
-# and netplan's link-local key is the actual, documented opt-out for it.
-# Left in place as defense in depth even though this key alone should now
-# make it redundant for anything cloned from this file.
-#
 # dhcp-identifier: mac fixes a DIFFERENT bug from everything above: two
 # real VDIs from two different pools (hz-ubt-02, MAC ...ec:6b, and
 # hz-ubt-r-01, MAC ...22:7d - confirmed genuinely different in vCenter's

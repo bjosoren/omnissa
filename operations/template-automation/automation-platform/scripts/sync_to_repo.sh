@@ -44,7 +44,9 @@ done
 EXCLUDES=(
   --exclude='*.local.yml' --exclude='logs/' --exclude='build_logs/' --exclude='files/'
   --exclude='packer_cache/' --exclude='.packer_cache/' --exclude='.packer_vars.json'
-  --exclude='.preflight_check.json' --exclude='*.bak' --exclude='*.orig' --exclude='*.log'
+  --exclude='.preflight_check.json' --exclude='*.log'
+  # backup / editor leftovers (same list in scrub_comments.py, repo_compare.sh, pre-commit, .gitignore)
+  --exclude='*.bak*' --exclude='*.orig' --exclude='*.old' --exclude='*.save' --exclude='*.pre-*' --exclude='*.new-*' --exclude='*~' --exclude='.*.sw?' --exclude='*.rej' --exclude='*.tmp' --exclude='*.part'
   --exclude='*.zip' --exclude='*.iso' --exclude='*.exe' --exclude='*.msi' --exclude='__pycache__/'
 )
 

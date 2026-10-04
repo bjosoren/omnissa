@@ -20,17 +20,6 @@
     # a missing one fails here with "'<name>' is undefined" naming exactly
     # which one to add.
     #
-    # horizon_farm_name (added 2026-09-10, alongside the existing
-    # horizon_pool_name) - this image publishes to an RDS Farm, not a
-    # desktop pool, but this file was originally copied from
-    # ubt_2404_tpl/resolve_vars.yml and only carried horizon_pool_name
-    # forward. Missing here meant scripts/publish_to_pool.sh's .packer_vars.json
-    # never had a horizon_farm_name key at all, so even after that script
-    # was fixed to look for it, it would always read as empty - see that
-    # script's own "Pool vs farm" header comment for the fix on its side.
-    # default('') matches horizon_pool_name's own treatment here (and
-    # ubt_2404_tpl's resolve_vars.yml, which has no horizon_farm_name key
-    # and doesn't need one).
     - name: Write resolved vars to a local, root-only JSON file
       ansible.builtin.copy:
         dest: "{{ playbook_dir }}/.packer_vars.json"

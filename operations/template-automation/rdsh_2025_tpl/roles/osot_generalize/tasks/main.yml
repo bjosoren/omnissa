@@ -29,43 +29,6 @@
 # manual GUI guide's own approach rather than MDT's). That decision is
 # about what the machine reseals TO after Generalize runs, and stands.
 #
-# Audit Mode precondition: per Omnissa's own "Optimizing Images Using
-# Omnissa Horizon Windows OS Optimization Tool - Command Line Operations"
-# PDF, Generalize's own Notes state plainly "The generalize operation
-# requires Windows in audit mode." This role does NOT enter Audit Mode
-# itself (an earlier version of this file did, right here, immediately
-# before the -g call below) - MOVED 2026-09-13 to roles/enter_audit_mode,
-# which now runs much earlier in playbook.yml, right after vmware_tools
-# (before dotnet35/windows_update/apps/osot_optimize too - repositioned
-# from an initial "right before osot_optimize only" placement after
-# reviewing Omnissa's "Manually creating optimized Windows images for
-# Horizon VMs" PDF end to end, whose own step order enters audit mode
-# before hypervisor tools/updates/apps, not just before Optimize - see
-# roles/enter_audit_mode's own header for the full rationale), so the user
-# can interactively test OSOT from the vCenter console while already in
-# Audit Mode. Audit Mode is "sticky" across the ordinary reboots that
-# happen in dotnet35/windows_update/apps/osot_optimize between there and
-# here, so the guest is still in Audit Mode by the time this role runs -
-# nothing in this playbook exits it before the -g call below does. (Every
-# role after THIS one - store_apps_cleanup/osot_optimize (pass 2 of 2)/
-# rds_role_install/horizon_agent/dem/appvolumes/osot_finalize_cleanup/
-# osot_finalize - runs after Generalize has already exited Audit Mode, back
-# into the full-OOBE-with-autologon state generalize_answer.xml.j2 reseals
-# to.)
-#
-# Manual pause before Generalize: ADDED 2026-09-15, per the user's explicit
-# request, right before this role does anything. Generalize is a much
-# harder step to walk back than the osot_optimize pause that used to exist
-# further up the pipeline (see below) was guarding: it consumes one of
-# Sysprep's limited rearm counts (see this role's own note further down/
-# enter_audit_mode's header), and it exits Audit Mode entirely, resealing
-# straight into full OOBE - there's no going back to "still in Audit Mode,
-# nothing committed yet" once it's released. This is the last point in the
-# pipeline where you can inspect the VM (OSOT's optimizations, dotnet35/
-# windows_update/apps results) while still in that easy-to-re-run state,
-# so the pause sits first in this role, before "Ensure OSOT is present on
-# VM" even runs.
-#
 # NOW THE ONLY MANUAL CHECKPOINT in the whole Audit-Mode stretch, as of
 # later the same day: roles/enter_audit_mode used to have its own separate
 # pause too, positioned before dotnet35/windows_update/apps/osot_optimize,
@@ -79,18 +42,6 @@
 # pause is what's left: one manual look, positioned AFTER Optimize has
 # already run and proven itself on this build, not before it.
 #
-# Connection reset after reconnecting: ADDED 2026-09-17, after a real build
-# failed on the very next task (store_apps_cleanup's first win_shell) with
-# a WinRM "invalid selectors for the resource" fault - a stale-shell
-# symptom, not a real connectivity problem (wait_for_connection itself
-# reported ok). This role's own reboot is manual (Sysprep's -reboot, via
-# async win_shell + wait_for_connection - see below for why it can't just
-# be ansible.windows.win_reboot), so unlike every other reboot in this
-# pipeline, it doesn't get Ansible's own automatic connection-state reset
-# that win_reboot performs internally. See the "Reset Ansible's cached
-# WinRM connection" task at the end of this file for the full explanation
-# and the fix (`meta: reset_connection`).
-#
 # Same v3 file-gate construct as enter_audit_mode's own remaining pause -
 # pure controller-side `lookup()` + `pause`, no module dispatched to any
 # host, so it's immune to the ansible_shell_type=cmd extra-var problem that
@@ -100,19 +51,6 @@
 # pipeline - this terminal (running packer build) stays busy the whole
 # time and won't accept input for this.
 #
-# MADE TOGGLEABLE 2026-09-16, per the user's explicit request ("the osot
-# generalize pause can now be disabled"), following the same pattern
-# windows_update's own enable_windows_update flag already established
-# (inventory/group_vars/rdsh_2025_tpl.yml) rather than deleting this code
-# outright: osot_optimize's own earlier pause (see the history above) WAS
-# deleted once trust in that step was established, but that one had no
-# further use once removed - this one is worth being able to switch back
-# on for a future build where you want the manual look again (a new answer
-# file, an OSOT version bump, anything else worth re-checking before
-# Generalize commits), without re-writing it from scratch. Set
-# osot_generalize_manual_pause: true in group_vars to bring it back -
-# defaults to false now, matching the user's request to disable it for the
-# next run.
 - name: PAUSE (file-gate) - clear any stale continue-marker before waiting for pre-Generalize review
   ansible.builtin.debug:
     msg: "{{ lookup('ansible.builtin.pipe', 'rm -f /tmp/rdsh_2025_tpl_pre_generalize_pause.go; echo marker-cleared') }}"
@@ -188,23 +126,6 @@
     timeout: 1800
     delay: 30
 
-# ADDED 2026-09-17, after a real build failed on the very next task
-# (store_apps_cleanup's first win_shell) with a WinRM fault straight out of
-# the "stale shell" family: "The WS-Management service cannot process the
-# request because the request contained invalid selectors for the
-# resource" (Bad HTTP response... Code 500, wsmanfault InvalidSelectors).
-# The failure lands on the first REAL task after this role, not on the
-# wait_for_connection task above (which reported ok) - that split is the
-# tell: wait_for_connection's own probe reconnected fine, but Ansible's
-# winrm connection plugin instance for this host was created earlier in
-# the play (before Sysprep tore the guest down) and, by design, reuses its
-# cached shell/session state across tasks within a play rather than
-# opening fresh state for every task. That cached state doesn't survive
-# the guest actually reinitializing (Sysprep's OOBE mini-setup is a much
-# bigger state change than a plain reboot) - the old shell ID the plugin
-# still had on file no longer exists on the "new" instance the guest just
-# became, hence "invalid selectors for the resource".
-#
 # This is a documented gotcha, not specific to this pipeline:
 # ansible.windows.win_reboot resets Ansible's own connection state for you
 # internally as part of what it does; a manual reboot path like this role's
@@ -220,43 +141,10 @@
 - name: Reset Ansible's cached WinRM connection after Sysprep/OOBE (avoids a stale-shell "invalid selectors" fault on the next task)
   ansible.builtin.meta: reset_connection
 
-# ADDED 2026-09-18, per Omnissa's own "Manually creating optimized Windows
-# images for Horizon VMs" PDF ("Run Generalize" section, step 3, "Wait for
-# AppX package provisioning"): "After Windows reboots and enters Out of the
-# Box Experience mode, AppX packages can be provisioned. To allow these to
-# be fully provisioned, you should wait 1-2 minutes after the first login
-# post-generalize before progressing." WinRM coming back (the two tasks
-# above) only means the OS is responsive again - it doesn't mean AppX
-# provisioning triggered by the OOBE mini-setup's first login has finished.
-# This pipeline used to move straight from "reset_connection" into
-# store_apps_cleanup with no wait at all, racing that provisioning - traced
-# as the likely cause of a real published VM showing several automatic
-# reboots on first power-on before settling at a stable logon screen (a
-# manual power-on/settle/re-snapshot worked around it once; this closes the
-# actual gap so post_build_snapshot.yml's clone doesn't inherit it again).
-# 150s rather than the PDF's own 1-2 minutes to build in some margin over
-# the vendor's stated minimum, given how much rides on this VM actually
-# being settled by the time OSOT Optimize (pass 2), the agent installs, and
-# OSOT Finalize all run against it afterward.
 - name: Wait for AppX package provisioning to finish after Sysprep/OOBE first login
   ansible.builtin.pause:
     seconds: 150
 
-# ADDED 2026-09-20, per the user's explicit request to capture OSOT's own
-# Generalize log into build_log_dir, the same way osot_optimize's "Copy
-# OSOT's own Optimize log into build_log_dir" task already does for -o.
-# Ref: Omnissa's "Run Windows OS Optimization Tool for Horizon from Command
-# Line" (docs.omnissa.com/Optimizing-Images-for-Horizon/
-# RunWindowsOSOptimizationToolforHorizonfromCommandLine) - which documents
-# the -g switch itself but, same as for -o, does NOT document a default log
-# file name/location for what it writes on its own.
-#
-# FILENAME PATTERN CONFIRMED 2026-09-21 - assumed "Generalize_*.log" by
-# analogy to Optimize_*.log, then verified directly against a real VM's
-# console (user-provided screenshot of C:\ProgramData\Omnissa\Omnissa OS
-# Optimization Tool\Log showing Generalize_20260920120237.log sitting
-# right alongside Optimize_20260920115929.log and the two Finalize_*.log
-# files - exactly the naming this task assumes).
 - name: Copy OSOT's own Generalize log into build_log_dir
   ansible.windows.win_shell: |
     $src = Get-ChildItem -Path "C:\ProgramData\Omnissa\Omnissa OS Optimization Tool\Log" -Filter "Generalize_*.log" -ErrorAction SilentlyContinue |
@@ -270,25 +158,6 @@
   when: build_log_enabled | default(true) | bool
   ignore_errors: true
 
-# ADDED 2026-09-19, per the user's explicit request, after a real build's
-# RecurringSchedulePushImage push to pool rdshfarm1p1 failed with
-# AGENT_CUSTOMIZATION_FAULT ("Internal template vm-10435 ... customization
-# failed. Error description not set by agent. Possible cause of
-# customization failure could be IC Agent missing, sysprep failure,
-# network/DNS settings, master VM configuration etc." - seen in
-# debug-2026-09-19-081654.txt lines 95220-95221) against the image built by
-# this same pipeline earlier that day (gi-rdsh2025-20260918-165324). The
-# broker doesn't say which of those possible causes it actually was - the
-# failure detail lives inside the guest during Instant Clone's own in-guest
-# customization pass, not in anything this playbook can see. Since "sysprep
-# failure" and "master VM configuration" are both plausible given the image
-# was built the same day Audit Mode entry moved to the auditUser pass (see
-# this role's own header) and wait_for_no_pending_reboot was added, this
-# checkpoint gives a chance to confirm THIS role's own Sysprep/Generalize
-# pass actually completed cleanly on the golden image itself, before ruling
-# it out and looking elsewhere (the Instant Clone customization step
-# itself, DNS/network, etc.).
-#
 # Positioned at the very end of this role - after WinRM is back up
 # (reset_connection) and AppX provisioning has had its 150s to settle, not
 # right after the reboot (that gap is already covered by the "Pause to let
@@ -341,10 +210,5 @@
   delay: 0
   when: osot_generalize_post_sysprep_pause | default(true) | bool
 
-# ADDED 2026-09-20 - see roles/common/tasks/log_phase_complete.yml's own
-# header for the full rationale (one running build_phase_log.txt entry per
-# role, imported as every role's LAST task, the mirror of
-# wait_for_no_pending_reboot.yml at the top of this same file being
-# imported as every role's FIRST task).
 - name: Log phase completion
   ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/log_phase_complete.yml"

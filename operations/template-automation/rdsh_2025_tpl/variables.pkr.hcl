@@ -180,20 +180,6 @@ variable "build_username" {
   # http/autounattend.pkrtpl.hcl) - there's no separate non-admin build
   # account here.
   #
-  # REVERTED 2026-09-14: briefly changed to "winrmadmin" (a dedicated local
-  # admin account created by floppy/autounattend.pkrtpl.hcl's specialize
-  # pass) after Administrator's WinRM logons kept failing all session -
-  # reverted back out per the user's explicit request after the very next
-  # real build hung at a DIFFERENT point (Packer's own initial WinRM
-  # communicator connection, before any Ansible role runs) with the console
-  # showing a fully-booted desktop that was entirely unresponsive to
-  # input - which looks like an ESXi/vCenter-level pending-question VM
-  # pause, not something this file change would cause, but reverting this
-  # one narrows things down while that gets checked separately. The
-  # winrmadmin account itself is still created by autounattend.pkrtpl.hcl
-  # (harmless, unused while this variable points back at Administrator) -
-  # see that file's own comment for the full original rationale if this
-  # needs revisiting once the actual cause of the freeze is confirmed.
 }
 variable "build_password" {
   type      = string

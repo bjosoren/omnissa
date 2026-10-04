@@ -6,21 +6,6 @@
 # pulls this in itself rather than playbook.yml interleaving it between
 # role: entries, which Ansible's roles: keyword doesn't support anyway).
 #
-# ADDED 2026-09-18, per the user's explicit request, after real builds
-# showed a VM landing on a fresh logon screen and then rebooting itself
-# again on its own - traced to a pending reboot/servicing state (Sysprep
-# Generalize's post-reboot AppX package provisioning, per Omnissa's own
-# "Manually creating optimized Windows images for Horizon VMs" PDF, which
-# says to wait 1-2 minutes after first login post-Generalize for AppX
-# provisioning to finish) being left outstanding at the end of one phase
-# and only surfacing as instability at the start of the next, or after the
-# whole pipeline finished and the resulting VM was powered on independently.
-# roles/vmware_tools/tasks/main.yml's own end-of-role settle loop was the
-# only place this was checked before now (added earlier for a real
-# 0x800f0922 failure in rds_role_install - see that role's own header) -
-# this generalizes the exact same check to run before every phase, not
-# just after VMware Tools.
-#
 # Reuses the exact same two registry markers vmware_tools has always
 # checked (Component Based Servicing RebootPending, Windows Update
 # RebootRequired) - deliberately not adding any additional detection here

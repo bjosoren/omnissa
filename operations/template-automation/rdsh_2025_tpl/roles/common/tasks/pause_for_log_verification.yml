@@ -11,19 +11,6 @@
 # you look is that exact still-fresh state, not several tasks' worth of
 # drift later.
 #
-# ADDED 2026-09-21, per the user's explicit request ("can you add a pause to
-# the different phases so that I can log into console and verify if the
-# logs are indeed collected"), made right after confirming - via a real
-# VM's own console (screenshots of C:\ProgramData\Omnissa\Omnissa OS
-# Optimization Tool\Log) - that the OSOT log filename guesses in
-# osot_generalize/osot_finalize_cleanup's own copy tasks (Generalize_*.log,
-# Finalize_*.log) were exactly right. Those screenshots were from a build
-# that predates those two copy tasks though, so this gives a repeatable way
-# to confirm the COPIED files (osot_generalize_report.log,
-# osot_finalize_cleanup_report.log, etc. under build_log_dir itself, not
-# OSOT's own source logs under its own folder) show up correctly on the
-# next real build.
-#
 # Same file-gate construct as every other pause in this pipeline (pure
 # controller-side lookup() + pause, released via touch from a SEPARATE
 # shell on ubt-ans-wrkr-02 - see osot_generalize's own pauses for the

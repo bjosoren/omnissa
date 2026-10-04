@@ -42,36 +42,6 @@
 // native per-clone customization support Windows does) - don't assume the
 // two images need the same domain-join treatment.
 //
-// UPDATED 2026-09-11: OSOT (OS Optimization Tool) IS now automated
-// (playbook.yml's osot_optimize/osot_generalize/osot_finalize roles) - this
-// comment previously called it "a known, previously-unresolved blocker on
-// this exact platform (hangs under Packer's WinRM provisioner due to
-// window-station restrictions)". That diagnosis was correct for the GUI
-// (a WPF app needing an interactive desktop/window station a non-interactive
-// WinRM session doesn't have) but the fix was never actually blocked - OSOT
-// ships a documented CLI (Omnissa docs: "Run Windows OS Optimization Tool
-// for Horizon from Command Line") that runs headless by design, sidestepping
-// the window-station problem entirely. See playbook.yml's own header and
-// roles/osot_optimize/osot_generalize/osot_finalize for the full rewrite,
-// done per the user's explicit request after reviewing Omnissa's "Using
-// Automation to Create Optimized Windows Images for Horizon VMs" and
-// "Manually creating optimized Windows images for Horizon VMs" guides.
-//
-// In-pipeline Windows Update IS automated (playbook.yml's windows_update
-// role) - this comment previously said it was deliberately skipped as
-// "optional" in the source guide, matching ubt_2404_tpl's own precedent of
-// not doing it in-pipeline. That was wrong on the specific point that
-// matters here: the source guide only marks .NET Framework 3.5 (NetFx3,
-// now its own dotnet35 role) as optional - the full Windows Update pass
-// itself is a required step in that guide, run in a loop with restarts
-// until nothing's left, positioned between hypervisor tools and everything
-// after it. Skipping it is what actually caused a real build failure
-// (rds_role_install's "Error: 0x800f0922" - see that role's own history and
-// windows_update's header comment), not just a flaky nice-to-have being
-// left out. Needs the build VM's network segment to have real internet or
-// WSUS reachability; ubt_2404_tpl not doing this in-pipeline is no longer
-// treated as precedent to follow here.
-//
 // This does NOT convert the VM to a vSphere template, same reasoning as
 // ubt_2404_tpl: Horizon instant clones are built from a snapshot on a
 // normal VM, not a vCenter template.
@@ -88,17 +58,6 @@ packer {
   }
 }
 
-# ADDED 2026-09-20, per the user's explicit request to be able to opt in/out
-# of collecting install logs at the start of a build. Declared HERE rather
-# than in this image's own variables.pkr.hcl - all .pkr.hcl files in a
-# directory are parsed together by Packer regardless of which one declares
-# a variable, so this is functionally identical to putting it there, but
-# doing it here means this whole feature (this file's variable block +
-# extra_arguments line, scripts/build.sh's prompt, and
-# roles/collect_build_logs) can be reviewed as one unit without needing
-# variables.pkr.hcl open at the same time. Move it into variables.pkr.hcl
-# later if you'd rather keep every variable declared in one place - no
-# functional difference either way.
 variable "collect_build_logs" {
   type        = bool
   default     = true
@@ -167,22 +126,6 @@ source "vsphere-iso" "rdsh_2025_tpl" {
   # guide's own windowsserver-rdsh.pkr.hcl does it.
   iso_paths = var.iso_paths
 
-  # ---- Autounattend handoff ----
-  # floppy_content (not the genisoimage+CD-ROM approach the source guide
-  # uses) - see this file's header comment for why. Windows Setup reads
-  # autounattend.xml from removable media root automatically, no boot_command
-  # needed to point it there. windows-vmtools.ps1 rides along on the same
-  # floppy (mounted as A:\, and still attached at this point regardless of
-  # which configuration pass is running - see floppy/autounattend.pkrtpl.hcl's
-  # own header) - autounattend.xml's own auditUser RunSynchronous pass
-  # invokes it to silently install VMware Tools from the second CD-ROM
-  # (iso_paths[1]). UPDATED 2026-09-16: this invocation used to be in
-  # oobeSystem's own FirstLogonCommands (the source guide's own
-  # script/invocation split, just delivered via floppy instead of the answer
-  # ISO); moved to auditUser as part of entering Audit Mode automatically
-  # during install itself - see roles/enter_audit_mode's own header for the
-  # full rationale. windows-vmtools.ps1 itself needed no changes for the
-  # move (no OOBE-specific assumptions).
   floppy_content = {
     "autounattend.xml"     = local.autounattend
     "windows-vmtools.ps1" = file("${path.root}/floppy/windows-vmtools.ps1")
@@ -238,32 +181,9 @@ build {
         "-e", "@${var.inventory_dir}/group_vars/all.yml",
         "-e", "@${var.inventory_dir}/group_vars/all/vault.yml",
         "-e", "@${var.inventory_dir}/group_vars/rdsh_2025_tpl.yml",
-        # ADDED 2026-09-18: Horizon Agent/DEM/App Volumes settings and OSOT
-        # settings were split out of rdsh_2025_tpl.yml into their own
-        # committed files (see rdsh_2025_tpl.yml's own header comment for
-        # the full rationale). scripts/build.sh's GROUP_VARS_ARGS already
-        # picked these two files up for the resolve-vars/preflight plays,
-        # but THIS provisioner builds its own, separate extra_arguments list
-        # for the actual in-guest playbook.yml run - it still only had the
-        # three files above, so these two were missing here even though the
-        # split itself was otherwise correct. That's what made a real build
-        # fail on osot_optimize's very first task ("'osot_installer' is
-        # undefined") even though the resolve-vars/preflight plays earlier
-        # in that same run had already succeeded.
         "-e", "@${var.inventory_dir}/group_vars/rdsh_2025_tpl_agents.yml",
         "-e", "@${var.inventory_dir}/group_vars/rdsh_2025_tpl_osot.yml",
       ],
-      # rdsh_2025_tpl.local.yml is this control node's real, site-specific
-      # override file (gitignored, never committed - see that file's own
-      # .example template for the full list of keys it can override).
-      # Included last, and only if it actually exists, so its values win
-      # over the three committed files above - same "only override what's
-      # present, local wins last" behavior scripts/build.sh's own
-      # LOCAL_VARS_FILE check already has. Without this, a real build would
-      # get past the "undefined" failure the two lines above fix, but would
-      # still run against the committed CHANGEME-* placeholder values
-      # (installer paths that don't exist on the NFS share, a fake vCenter
-      # folder, etc.) instead of this control node's real ones.
       fileexists("${var.inventory_dir}/group_vars/rdsh_2025_tpl.local.yml") ? [
         "-e", "@${var.inventory_dir}/group_vars/rdsh_2025_tpl.local.yml",
       ] : [],
@@ -277,28 +197,6 @@ build {
         # documents for the Linux side.
         "-e", "ansible_password=${var.build_password}",
         "-e", "ansible_winrm_server_cert_validation=ignore",
-        # NTLM transport, not pywinrm's Basic-auth default - CHANGED 2026-09-14
-        # per the Omnissa Community "Horizon Gold Image creation with Ansible"
-        # guide's own vars/rdsh_image.yml (winrm_transport: "ntlm"), tried as a
-        # fix for this build's ongoing WinRM instability. The guide's own
-        # stated reason: Windows Update's API needs the token NTLM negotiation
-        # provides, Basic auth doesn't carry it - and separately, Basic auth's
-        # failure modes are exactly the kind of generic, undifferentiated
-        # "Access is denied" this pipeline has been chasing all session
-        # (lockout, bad password, and must-change-password all surfaced
-        # identically under Basic - see floppy/autounattend.pkrtpl.hcl's
-        # lockoutthreshold comment). Requires the requests_ntlm Python package
-        # in the control node's ansible-venv (pip install requests_ntlm) -
-        # pywinrm itself is already a prerequisite for the Basic path this
-        # replaces, so only requests_ntlm is new. WinRM's service side now
-        # enables BOTH Basic and Negotiate (see floppy/autounattend.pkrtpl.hcl's
-        # own auditSystem/auditUser passes - this content used to live in
-        # roles/enter_audit_mode/templates/audit_answer.xml.j2, now deleted,
-        # its proven WinRM-bootstrap sequence moved verbatim into that file
-        # instead - and roles/osot_generalize/templates/generalize_answer.xml.j2 -
-        # both updated together) so this is additive, not a replacement - if NTLM
-        # doesn't pan out, dropping this one line reverts to Basic without
-        # touching the Windows-side config at all.
         "-e", "ansible_winrm_transport=ntlm",
         # Scoped here, NOT in group_vars/all.yml: this build's WinRM plays need
         # cmd (Ansible's win_* action plugins build their command lines for cmd
@@ -314,42 +212,6 @@ build {
         # dying on the very first task (Gathering Facts) with exactly this
         # warning immediately above the error.
         "-e", "ansible_shell_type=cmd",
-        # ADDED 2026-09-15 after a real build died mid-playbook with
-        # "[ERROR]: Task failed: Bad HTTP response returned from server.
-        # Code 400" - not an OSOT-specific error at all, a genuine WinRM
-        # transport failure, thrown from
-        # roles/osot_optimize/tasks/main.yml's own "Wait for OSOT Optimize
-        # pass to finish" polling task after only ~21 retries (~5 minutes),
-        # while an earlier file-gate pause task in that SAME build (roles/
-        # enter_audit_mode, same short-WinRM-call-in-a-loop pattern) had
-        # already run 222 retries (~55 minutes) without incident - so this
-        # wasn't "polling eventually breaks WinRM," it was specific to
-        # whatever that particular task's WinRM traffic was doing.
-        #
-        # Root cause candidate, from Ansible's own WinRM docs
-        # (docs.ansible.com/projects/ansible/latest/os_guide/windows_winrm.html):
-        # "HTTP can be used when the authentication option is NTLM, Kerberos
-        # or CredSSP. These protocols will encrypt the WinRM payload with
-        # their own encryption method before sending it to the server" -
-        # i.e. with winrm_use_ssl=false/winrm_insecure=true above (Packer's
-        # own deliberate choice, unrelated to this) and ntlm transport
-        # (added 2026-09-14, see that var's own comment), every single WinRM
-        # request this whole playbook sends is being wrapped in NTLM's own
-        # message-level encryption automatically - "message-level encryption
-        # is not used when running over HTTPS" (same doc), confirming this
-        # only applies because this build deliberately isn't using HTTPS.
-        # A real, still-open ansible-project forum thread
-        # (forum.ansible.com/t/kerberos-bad-http-response-returned-from-server-code-400/26869)
-        # documents the IDENTICAL error text, root-caused there to that same
-        # message-encryption layer failing and producing a malformed
-        # request, for the Kerberos case specifically - fixed by setting
-        # ansible_winrm_message_encryption=never (or moving to HTTPS, port
-        # 5986, not used here). That thread is Kerberos, not NTLM - this is
-        # inference by analogy to NTLM's own equivalent encryption wrapping,
-        # not a confirmed identical bug report for NTLM, so treat this as
-        # the best-evidenced candidate worth testing next, not a confirmed
-        # fix yet.
-        #
         # Disabling message encryption here does NOT newly expose anything -
         # winrm_insecure=true above already means Packer's own WinRM
         # communicator traffic is unencrypted plain HTTP on this same
@@ -358,12 +220,6 @@ build {
         # an extra encryption layer on top of a transport that was already
         # deliberately left unencrypted.
         "-e", "ansible_winrm_message_encryption=never",
-        # ADDED 2026-09-20 - threads scripts/build.sh's start-of-build
-        # "collect install logs?" prompt (exported as PKR_VAR_collect_build_logs,
-        # see that script's own comment) through to roles/collect_build_logs'
-        # own collect_build_logs var. ${var.collect_build_logs} interpolates
-        # to the literal string "true"/"false", which that role's
-        # `| bool` filter reads correctly either way.
         "-e", "collect_build_logs=${var.collect_build_logs}",
       ]
     )

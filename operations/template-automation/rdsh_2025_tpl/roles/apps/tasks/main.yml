@@ -44,11 +44,6 @@
   when: apps_to_install is defined and apps_to_install | length > 0
   register: apps_install
 
-# Added 2026-09-11 - the user's own 16-step sequence marks this step
-# "(Reboot)". Only reboots if something was actually installed (the
-# apps_to_install: [] default makes this role a no-op on most builds today -
-# no point rebooting for nothing), and only once even if several apps
-# installed in the loop above.
 - name: Reboot after extra app installs, if anything actually installed
   ansible.windows.win_reboot:
     reboot_timeout: 600

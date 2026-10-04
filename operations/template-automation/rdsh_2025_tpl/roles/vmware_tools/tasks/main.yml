@@ -6,28 +6,6 @@
 # rdsh_2025_tpl.pkr.hcl's floppy_content comment. This role just confirms
 # that actually landed, rather than re-installing it.
 #
-# UPDATED 2026-09-16: the windows-vmtools.ps1 invocation moved from the
-# oobeSystem pass's FirstLogonCommands to the auditUser pass's
-# RunSynchronous block (Orders 14-15), as part of moving Audit Mode entry
-# to happen automatically during install itself (Microsoft-Windows-Deployment/
-# Reseal/Mode=Audit in oobeSystem - see roles/enter_audit_mode's own header
-# for the full rationale and citations). oobeSystem's own role now is just
-# to trigger that Reseal; it no longer carries FirstLogonCommands at all.
-# windows-vmtools.ps1 itself needed no changes to run from the new location -
-# confirmed it has no OOBE-specific assumptions (plain WMI CD-ROM detection +
-# a silent MSI install), so it runs identically from either pass. This role's
-# own verification logic below (VMTools service check) is unaffected either
-# way - it doesn't care which pass installed the service, only that it's
-# there by the time this role runs.
-#
-# UPDATED 2026-09-18: now imports roles/common/tasks/wait_for_no_pending_reboot.yml
-# as its very first task, same as every other role in playbook.yml - see
-# that file's own header for why. This is a DIFFERENT check than this
-# role's own end-of-file settle loop below: the shared task guards against
-# anything left pending from an EARLIER phase (base, in this role's case -
-# cheap/near-instant here since base does no guest work that could leave a
-# reboot pending), while this role's own loop settles reboots caused by ITS
-# OWN work (VMware Tools' suppressed driver-install reboot). Both stay.
 - name: Confirm no pending reboot before this phase
   ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/wait_for_no_pending_reboot.yml"
 
@@ -139,10 +117,5 @@
   ansible.builtin.debug:
     msg: "Pending reboot state after VMware Tools install: {{ reboot_check_4.stdout | trim }}"
 
-# ADDED 2026-09-20 - see roles/common/tasks/log_phase_complete.yml's own
-# header for the full rationale (one running C:\ProgramData\Omnissa\Logs\
-# build_phase_log.txt entry per role, imported as every role's LAST task,
-# the mirror of wait_for_no_pending_reboot.yml at the top of this same
-# file being imported as every role's FIRST task).
 - name: Log phase completion
   ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/log_phase_complete.yml"

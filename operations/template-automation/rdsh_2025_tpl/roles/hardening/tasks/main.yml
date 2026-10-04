@@ -41,12 +41,6 @@
 # image that's never domain-joined, so this role now documents the
 # requirement instead of attempting - and failing - it locally.
 #
-# rdsh_login_group (the group_vars variable that used to document which AD
-# group the GPO needs to target) was REMOVED 2026-09-18, per the user's
-# explicit request - it was never consumed by any task, only referenced in
-# this debug message's text, so removing it needed this one update to stop
-# referencing it. The real AD group name lives wherever you track your GPO
-# configuration now (ADUC / your GPO documentation), not in this repo.
 - name: RDSH login group must be added to Remote Desktop Users via GPO, not here
   ansible.builtin.debug:
     msg: >-
@@ -58,9 +52,5 @@
       mode. RDSH session logins will fail until that GPO exists, targets
       the correct AD group, and has applied.
 
-# ADDED 2026-09-20 - see roles/common/tasks/log_phase_complete.yml's own
-# header for the full rationale (one running build_phase_log.txt entry per
-# role, imported as every role's LAST task, the mirror of
-# wait_for_no_pending_reboot.yml imported as every role's FIRST task).
 - name: Log phase completion
   ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/log_phase_complete.yml"
