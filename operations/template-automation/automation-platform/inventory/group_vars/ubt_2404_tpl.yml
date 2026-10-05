@@ -20,6 +20,7 @@ vcenter_network: "CHANGEME-portgroup"         # <- placeholder
 # ---- Sizing ----
 vm_cpu_count: 2
 vm_mem_size_mb: 4096
+vm_vgpu_profile: ""                         # "" = no vGPU; normally chosen in the placement picker
 vm_disk_size_mb: 65536
 
 # ---- Install media ----

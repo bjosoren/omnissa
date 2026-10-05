@@ -223,6 +223,72 @@ def pick_horizon_target(project_root: Path, image_key: str, vault):
 
     return True, target_type, target_name
 
+def pick_vgpu_profile(cluster, host):
+    """Optional vGPU for the build VM. Profiles come from vCenter: what the
+    picked host offers, or every connected host in the cluster when the host
+    is left to DRS. Returns the profile name, or "" for none."""
+    if not prompt_yes_no("Add a vGPU to the build VM?", default_yes=False):
+        return ""
+    hosts = [host] if host else sorted(cluster.host, key=lambda h: h.name)
+    offered = {}
+    for h in hosts:
+        if h.runtime.connectionState != "connected":
+            continue
+        try:
+            target = cluster.environmentBrowser.QueryConfigTarget(host=h)
+        except Exception as e:
+            print(f"    {h.name}: could not read vGPU profiles ({e})")
+            continue
+        for g in (target.sharedGpuPassthroughTypes or []):
+            if g.vgpu:
+                offered.setdefault(g.vgpu, []).append(h.name)
+    where = host.name if host else f"cluster {cluster.name}"
+    if not offered:
+        print(f"    No vGPU profiles offered on {where}. Check that the NVIDIA vGPU host")
+        print("    driver is installed and the host graphics type is 'Shared Direct'.")
+        if prompt_yes_no("Type a profile name anyway?", default_yes=False):
+            return input("vGPU profile (e.g. grid_a16-2q): ").strip()
+        return ""
+    names = sorted(offered)
+    choice = prompt_choice(
+        f"Select vGPU profile ({where})", names,
+        lambda p: p if host else f"{p}  ({', '.join(offered[p])})",
+        allow_none_label="No vGPU",
+    )
+    return choice or ""
+
+
+WSUS_URL_RE = re.compile(r"https?://[A-Za-z0-9.-]+(:\d+)?/?")
+
+
+def pick_windows_update(project_root, image_key, vault):
+    """Windows images only (those with roles/windows_update): run Windows
+    Update in the build, and from Windows Update or WSUS. Returns the vars
+    for the overrides file, {} for images without Windows Update."""
+    if not (project_root / "images" / image_key / "roles" / "windows_update").is_dir():
+        return {}
+    gv = load_group_vars(project_root, image_key, vault)
+    source = str(gv.get("windows_update_source") or "windows_update")
+    url = str(gv.get("wsus_server_url") or "")
+    if not prompt_yes_no("Run Windows Update during the build?",
+                         default_yes=bool(gv.get("enable_windows_update", True))):
+        return {"enable_windows_update": False, "windows_update_source": source,
+                "wsus_server_url": url}
+    labels = {"windows_update": "Windows Update (Microsoft - needs internet)",
+              "wsus": "WSUS"}
+    source = prompt_choice("Update source", ["windows_update", "wsus"], lambda s: labels[s])
+    if source == "wsus":
+        while True:
+            hint = f" [{url}]" if url else " (e.g. http://wsus.example.com:8530)"
+            raw = input(f"WSUS server URL{hint}: ").strip() or url
+            if WSUS_URL_RE.fullmatch(raw):
+                url = raw.rstrip("/")
+                break
+            print("Use http(s)://host[:port], e.g. http://wsus.example.com:8530")
+    return {"enable_windows_update": True, "windows_update_source": source,
+            "wsus_server_url": url}
+
+
 def config_paths(project_root: Path, image_key: str, name: str):
     """Paths of a saved config: configs/<image_key>__<name>.overrides.yml / .control.sh"""
     if not CONFIG_NAME_RE.fullmatch(name):
@@ -335,6 +401,8 @@ def main():
             allow_none_label="Any (let DRS decide)",
         )
 
+        vgpu_profile = pick_vgpu_profile(cluster, host)
+
         datastores = sorted(cluster.datastore, key=lambda d: d.name)
         if not datastores:
             sys.exit(f"No datastores visible to cluster '{cluster.name}'")
@@ -366,6 +434,8 @@ def main():
 
         collect_logs = prompt_yes_no("Collect Install logs?", default_yes=True)
 
+        windows_update = pick_windows_update(project_root, args.image_key, vault)
+
         publish_to_pool, horizon_target_type, horizon_target_name = pick_horizon_target(
             project_root, args.image_key, vault
         )
@@ -378,7 +448,9 @@ def main():
             "vcenter_datastore": datastore.name,
             "vcenter_network": network.name,
             "vcenter_folder": folder_path,
+            "vm_vgpu_profile": vgpu_profile,
         }
+        placement_overrides.update(windows_update)
 
         print("\n--- Selected placement ---")
         for k, v in placement_overrides.items():

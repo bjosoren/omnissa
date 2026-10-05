@@ -60,6 +60,10 @@ variable "vm_mem_size_mb" {
   type    = number
   default = 8192
 }
+variable "vm_vgpu_profile" { # e.g. "grid_a16-2q"; "" = no vGPU
+  type    = string
+  default = ""
+}
 variable "vm_disk_size_mb" {
   type    = number
   default = 81920
@@ -185,4 +189,22 @@ variable "appvolumes_agent_installer" {
 }
 variable "appvolumes_manager" {
   type = string
+}
+
+// ---- Windows Update (placement picker) ----
+variable "enable_windows_update" {
+  type    = bool
+  default = true
+}
+variable "windows_update_source" { # windows_update | wsus
+  type    = string
+  default = "windows_update"
+  validation {
+    condition     = contains(["windows_update", "wsus"], var.windows_update_source)
+    error_message = "The windows_update_source variable must be windows_update or wsus."
+  }
+}
+variable "wsus_server_url" { # e.g. http://wsus.example.com:8530
+  type    = string
+  default = ""
 }

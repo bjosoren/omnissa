@@ -74,6 +74,10 @@ variable "vm_mem_size_mb" {
   type    = number
   default = 4096
 }
+variable "vm_vgpu_profile" { # e.g. "grid_a16-2q"; "" = no vGPU
+  type    = string
+  default = ""
+}
 
 variable "vm_disk_size_mb" {
   type    = number
@@ -100,7 +104,7 @@ variable "guest_hostname" {
 
 variable "guest_ip_cidr" {
   type = string
-  # e.g. "10.10.20.50/24" - reserve this address ahead of time, see the platform post
+  # e.g. "198.51.100.50/24" - reserve this address ahead of time, see the platform post
 }
 
 variable "guest_gateway" {

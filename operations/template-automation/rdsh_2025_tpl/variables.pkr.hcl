@@ -67,6 +67,10 @@ variable "vm_mem_size_mb" {
   type    = number
   default = 16384
 }
+variable "vm_vgpu_profile" { # e.g. "grid_a16-2q"; "" = no vGPU
+  type    = string
+  default = ""
+}
 variable "vm_disk_size_mb" {
   type    = number
   default = 81920
@@ -88,6 +92,10 @@ variable "vm_disk_size_mb" {
 variable "vm_guest_os_type" {
   type    = string
   default = "windows2022srvNext_64Guest"
+}
+variable "vm_secure_boot" {
+  type    = bool
+  default = true
 }
 variable "vm_version" {
   type    = number
@@ -124,7 +132,7 @@ variable "guest_ip_cidr" {
   # guest already comes up on DHCP regardless of what this holds. Left
   # optional/unused on purpose for a DHCP-only setup; only fill this (and
   # add an actual static-IP task) if you later want a reserved address
-  # instead. e.g. "10.10.20.60/24"
+  # instead. e.g. "198.51.100.60/24"
 }
 variable "guest_gateway" {
   type    = string
@@ -243,4 +251,22 @@ variable "appvolumes_agent_installer" {
 variable "appvolumes_manager" {
   type = string
   # App Volumes Manager hostname/FQDN the agent phones home to.
+}
+
+// ---- Windows Update (placement picker) ----
+variable "enable_windows_update" {
+  type    = bool
+  default = true
+}
+variable "windows_update_source" { # windows_update | wsus
+  type    = string
+  default = "windows_update"
+  validation {
+    condition     = contains(["windows_update", "wsus"], var.windows_update_source)
+    error_message = "The windows_update_source variable must be windows_update or wsus."
+  }
+}
+variable "wsus_server_url" { # e.g. http://wsus.example.com:8530
+  type    = string
+  default = ""
 }

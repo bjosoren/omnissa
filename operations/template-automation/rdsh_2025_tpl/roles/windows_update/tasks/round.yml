@@ -32,6 +32,7 @@
     reject_list:
       - "KB2267602"
     state: installed
+    server_selection: "{{ windows_update_server_selection | default('default') }}"
     reboot: true
     reboot_timeout: 1800
   register: wu_round

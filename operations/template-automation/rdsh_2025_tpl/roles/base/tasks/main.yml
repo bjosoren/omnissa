@@ -23,3 +23,17 @@
     path: "{{ build_log_dir }}"
     state: directory
   when: build_log_enabled | bool
+
+- name: Verify UEFI Secure Boot state matches vm_secure_boot
+  ansible.windows.win_shell: |
+    $sb = Confirm-SecureBootUEFI
+    Write-Output $sb
+    if ([bool]$sb -ne ${{ vm_secure_boot | default(true) | bool | string | lower }}) {
+      throw "Secure Boot is '$sb' but vm_secure_boot is {{ vm_secure_boot | default(true) | bool }}"
+    }
+  register: secure_boot_state
+  changed_when: false
+
+- name: Show Secure Boot state
+  ansible.builtin.debug:
+    msg: "UEFI Secure Boot enabled: {{ secure_boot_state.stdout | trim }}"

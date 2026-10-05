@@ -101,10 +101,13 @@ source "vsphere-iso" "rdsh_2025_tpl" {
   CPUs          = var.vm_cpu_count
   cpu_cores     = var.vm_cores_per_socket
   RAM           = var.vm_mem_size_mb
-  # EFI without Secure Boot or vTPM - not required for Windows Server RDSH,
-  # unlike Windows 11 VDI (which needs both). Matches the source guide's own
-  # windowsserver-rdsh.pkr.hcl.
-  firmware = "efi"
+  // vGPU from the placement picker ("" = none). A vGPU VM needs all its
+  // memory reserved.
+  vgpu_profile    = var.vm_vgpu_profile != "" ? var.vm_vgpu_profile : null
+  RAM_reserve_all = var.vm_vgpu_profile != ""
+  // UEFI + Secure Boot when vm_secure_boot = true (default). No vTPM:
+  // Horizon adds its own to the clones.
+  firmware = var.vm_secure_boot ? "efi-secure" : "efi"
 
   disk_controller_type = ["pvscsi"]
   storage {
@@ -221,6 +224,12 @@ build {
         # deliberately left unencrypted.
         "-e", "ansible_winrm_message_encryption=never",
         "-e", "collect_build_logs=${var.collect_build_logs}",
+        // Windows Update choice from the placement picker (JSON keeps types intact).
+        "-e", jsonencode({
+          enable_windows_update = var.enable_windows_update
+          windows_update_source = var.windows_update_source
+          wsus_server_url       = var.wsus_server_url
+        }),
       ]
     )
   }

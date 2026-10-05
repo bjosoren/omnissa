@@ -390,6 +390,10 @@ case "$IMAGE_KEY" in
     ;;
 esac
 
+# Optional installers, checked only when switched on.
+if [ "$(get install_horizon_client | tr '[:upper:]' '[:lower:]')" = "true" ]; then
+  INSTALLER_VARS+=(horizon_client_installer)
+fi
 for var in "${INSTALLER_VARS[@]}"; do
   path="$(get "$var")"
   if [ -z "$path" ]; then

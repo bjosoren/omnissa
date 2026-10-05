@@ -1,0 +1,61 @@
+---
+# Omnissa Horizon Client on the RDSH host (nested sessions), silent install with
+# Log in as Current User (ADDLOCAL=TSSO) - Omnissa Horizon Client for Windows
+# guide, "Install Horizon Client from the Command Line".
+- name: Confirm no pending reboot before this phase
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/wait_for_no_pending_reboot.yml"
+
+- name: Copy Horizon Client installer to VM
+  ansible.windows.win_copy:
+    src: "{{ horizon_client_installer }}"
+    dest: "C:\\Temp\\{{ horizon_client_installer | basename }}"
+
+- name: Install Horizon Client
+  ansible.windows.win_package:
+    path: "C:\\Temp\\{{ horizon_client_installer | basename }}"
+    arguments: >-
+      /silent /norestart
+      LOGINASCURRENTUSER_DISPLAY={{ horizon_client_login_as_current_user_display | default(true) | bool | int }}
+      LOGINASCURRENTUSER_DEFAULT={{ horizon_client_login_as_current_user_default | default(true) | bool | int }}
+      ADDLOCAL={{ horizon_client_addlocal | default('TSSO') }}
+    state: present
+    expected_return_code: [0, 3010, 1641]
+  register: horizon_client_install
+
+- name: Copy the Horizon Client installer logs into build_log_dir
+  ansible.windows.win_shell: |
+    $logs = Get-ChildItem -Path $env:TEMP -Filter '*.log' -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -match 'Horizon.*Client|Client.*Horizon' -and $_.LastWriteTime -gt (Get-Date).AddHours(-2) }
+    foreach ($l in $logs) { Copy-Item $l.FullName -Destination "{{ build_log_dir }}\horizon_client_$($l.Name)" -Force }
+    "copied $(@($logs).Count) log(s)"
+  register: horizon_client_logs
+  changed_when: false
+  when: build_log_enabled | default(true) | bool
+  ignore_errors: true
+
+- name: Reboot after Horizon Client install
+  ansible.windows.win_reboot:
+    reboot_timeout: 600
+    post_reboot_delay: 30
+    msg: "Rebooting after Horizon Client installation"
+  when: (horizon_client_install.rc | default(0)) in [3010, 1641] or (horizon_client_install.reboot_required | default(false))
+
+- name: Verify Horizon Client is installed
+  ansible.windows.win_shell: |
+    $keys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    $c = Get-ItemProperty $keys -ErrorAction SilentlyContinue |
+      Where-Object { $_.DisplayName -like '*Horizon Client*' } | Select-Object -First 1
+    if (-not $c) { throw "Horizon Client not found in the installed programs" }
+    "$($c.DisplayName) $($c.DisplayVersion)"
+  register: horizon_client_verify
+  changed_when: false
+
+- name: Show Horizon Client result
+  ansible.builtin.debug:
+    msg:
+      - "{{ horizon_client_verify.stdout | trim }}"
+      - "ADDLOCAL={{ horizon_client_addlocal | default('TSSO') }}, installer rc={{ horizon_client_install.rc | default('?') }}"
+
+- name: Log phase completion
+  ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/log_phase_complete.yml"

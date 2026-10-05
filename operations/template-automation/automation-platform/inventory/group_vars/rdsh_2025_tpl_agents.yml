@@ -45,7 +45,7 @@ dem_comp_env_config: ""
 
 # ---- App Volumes Agent ----
 appvolumes_agent_installer: "/mnt/wdnfs/Ansible/appvolumes/CHANGEME-appvolumes-agent-installer.msi"   # <- placeholder - real value (on your NFS share's appvolumes/ folder) goes in rdsh_2025_tpl.local.yml
-appvolumes_manager: "appvol.example.com"   # already safe - generic placeholder hostname
+appvolumes_manager: "appvol.example.com"   # real value in rdsh_2025_tpl.local.yml
 appvolumes_port: 443
 appvolumes_ssl_validation: 1
 
@@ -55,3 +55,10 @@ horizon_api_username: "CHANGEME-api-username"   # <- placeholder - real value go
 horizon_api_domain: "example.com"   # already safe - generic placeholder domain
 # vault_horizon_api_password goes in inventory/group_vars/all/vault.yml,
 # same entry ubt_2404_tpl.yml already uses (shared, not per-image).
+
+# ---- Horizon Client (nested sessions from the RDSH host) ----
+install_horizon_client: true
+horizon_client_installer: "/mnt/wdnfs/Ansible/horizon/CHANGEME-horizon-client-installer.exe"   # real name in .local.yml
+horizon_client_addlocal: "TSSO"                       # Log in as Current User
+horizon_client_login_as_current_user_display: true    # LOGINASCURRENTUSER_DISPLAY
+horizon_client_login_as_current_user_default: true    # LOGINASCURRENTUSER_DEFAULT

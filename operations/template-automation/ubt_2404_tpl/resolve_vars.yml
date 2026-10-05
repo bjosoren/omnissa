@@ -47,6 +47,7 @@
             'vcenter_network': vcenter_network,
             'vm_cpu_count': vm_cpu_count,
             'vm_mem_size_mb': vm_mem_size_mb,
+            'vm_vgpu_profile': vm_vgpu_profile | default(''),
             'vm_disk_size_mb': vm_disk_size_mb,
             'iso_paths': iso_paths,
             'guest_hostname': guest_hostname,

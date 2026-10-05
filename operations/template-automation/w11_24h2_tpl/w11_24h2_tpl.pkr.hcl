@@ -55,6 +55,10 @@ source "vsphere-iso" "w11_24h2_tpl" {
   CPUs          = var.vm_cpu_count
   cpu_cores     = var.vm_cores_per_socket
   RAM           = var.vm_mem_size_mb
+  // vGPU from the placement picker ("" = none). A vGPU VM needs all its
+  // memory reserved.
+  vgpu_profile    = var.vm_vgpu_profile != "" ? var.vm_vgpu_profile : null
+  RAM_reserve_all = var.vm_vgpu_profile != ""
 
   // UEFI + Secure Boot. No vTPM (needs a key provider); Setup's TPM check is
   // bypassed in the autounattend instead.
@@ -144,6 +148,12 @@ build {
         // top of it caused intermittent "Bad HTTP response ... Code 400".
         "-e", "ansible_winrm_message_encryption=never",
         "-e", "collect_build_logs=${var.collect_build_logs}",
+        // Windows Update choice from the placement picker (JSON keeps types intact).
+        "-e", jsonencode({
+          enable_windows_update = var.enable_windows_update
+          windows_update_source = var.windows_update_source
+          wsus_server_url       = var.wsus_server_url
+        }),
       ]
     )
   }

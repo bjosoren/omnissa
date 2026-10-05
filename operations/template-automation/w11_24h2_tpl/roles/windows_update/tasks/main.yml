@@ -1,6 +1,50 @@
 - name: Confirm no pending reboot before this phase
   ansible.builtin.import_tasks: "{{ role_path }}/../common/tasks/wait_for_no_pending_reboot.yml"
 
+- name: Windows Update source for this build
+  ansible.builtin.set_fact:
+    _wu_wsus: "{{ (windows_update_source | default('windows_update')) == 'wsus' }}"
+    windows_update_server_selection: >-
+      {{ 'managed_server' if (windows_update_source | default('windows_update')) == 'wsus'
+         else 'windows_update' }}
+
+- name: Fail if WSUS was chosen without a server URL
+  ansible.builtin.assert:
+    that: wsus_server_url | default('') | length > 0
+    fail_msg: "windows_update_source is wsus but wsus_server_url is empty"
+  when: _wu_wsus | bool
+
+- name: Point Windows Update at WSUS (WUServer / WUStatusServer)
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate
+    name: "{{ wu_value }}"
+    data: "{{ wsus_server_url }}"
+    type: string
+  loop: [WUServer, WUStatusServer]
+  loop_control:
+    loop_var: wu_value
+  when: _wu_wsus | bool
+
+- name: Point Windows Update at WSUS (UseWUServer = 1)
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU
+    name: UseWUServer
+    data: 1
+    type: dword
+  when: _wu_wsus | bool
+
+- name: Restart Windows Update to pick up the WSUS setting
+  ansible.windows.win_service:
+    name: wuauserv
+    state: restarted
+  when: _wu_wsus | bool
+
+- name: Show Windows Update source
+  ansible.builtin.debug:
+    msg: >-
+      Updating from {{ ('WSUS ' ~ wsus_server_url) if (_wu_wsus | bool) else 'Windows Update (Microsoft)' }}
+      (server_selection {{ windows_update_server_selection }})
+
 - name: "Windows Update round"
   ansible.builtin.include_tasks: round.yml
   loop: "{{ range(1, 7) | list }}"
@@ -19,6 +63,25 @@
       Get-WindowsUpdateLog or Settings > Windows Update > Update history).
       Console/WinRM into the VM and check manually before re-running.
   when: windows_update_clear is not defined or not windows_update_clear
+
+- name: Remove the build-time WSUS setting from the image (clones get theirs from GPO)
+  ansible.windows.win_regedit:
+    path: "{{ wu_reg.path }}"
+    name: "{{ wu_reg.name }}"
+    state: absent
+  loop:
+    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', name: WUServer }
+    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate', name: WUStatusServer }
+    - { path: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU', name: UseWUServer }
+  loop_control:
+    loop_var: wu_reg
+  when: (_wu_wsus | bool) and not (wsus_keep_policy | default(false) | bool)
+
+- name: Restart Windows Update after removing the WSUS setting
+  ansible.windows.win_service:
+    name: wuauserv
+    state: restarted
+  when: (_wu_wsus | bool) and not (wsus_keep_policy | default(false) | bool)
 
 - name: Show Windows Update settle result
   ansible.builtin.debug:

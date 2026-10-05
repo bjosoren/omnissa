@@ -69,6 +69,10 @@ source "vsphere-iso" "ubt_2404_tpl" {
   guest_os_type = "ubuntu64Guest"
   CPUs          = var.vm_cpu_count
   RAM           = var.vm_mem_size_mb
+  // vGPU from the placement picker ("" = none). A vGPU VM needs all its
+  // memory reserved.
+  vgpu_profile    = var.vm_vgpu_profile != "" ? var.vm_vgpu_profile : null
+  RAM_reserve_all = var.vm_vgpu_profile != ""
   firmware      = "efi"
 
   storage {

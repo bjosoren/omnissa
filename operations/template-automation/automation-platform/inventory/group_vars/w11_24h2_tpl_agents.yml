@@ -37,7 +37,7 @@ dem_comp_env_config: ""
 
 # ---- App Volumes ----
 appvolumes_agent_installer: "/mnt/wdnfs/Ansible/appvolumes/CHANGEME-appvolumes-agent-installer.msi"
-appvolumes_manager: "appvol.example.com"
+appvolumes_manager: "appvol.example.com"   # real value in w11_24h2_tpl.local.yml
 appvolumes_port: 443
 appvolumes_ssl_validation: 1
 

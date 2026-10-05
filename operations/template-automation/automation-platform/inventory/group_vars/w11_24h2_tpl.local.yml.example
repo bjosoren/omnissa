@@ -28,3 +28,5 @@ horizon_api_username: "REPLACE-ME"
 horizon_connection_server: "REPLACE-ME.example.com"
 horizon_api_domain: "example.com"
 appvolumes_manager: "REPLACE-ME.example.com"
+
+wsus_server_url: "http://<fqdn your-wsus>:8530"

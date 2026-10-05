@@ -30,6 +30,7 @@ vcenter_network: "CHANGEME-portgroup"       # <- placeholder - real value goes i
 vm_cpu_count: 4
 vm_cores_per_socket: 2
 vm_mem_size_mb: 16384
+vm_vgpu_profile: ""                         # "" = no vGPU; normally chosen in the placement picker
 vm_disk_size_mb: 81920
 
 # ---- Guest OS type ----
@@ -39,6 +40,7 @@ vm_disk_size_mb: 81920
 # windows2022srvNext_64Guest here, not windows2025srvNext_64Guest.
 vm_guest_os_type: "windows2022srvNext_64Guest"
 vm_version: 20                                    # hardware version 20+ needed for a native Server 2025 guest profile
+vm_secure_boot: true                        # efi-secure; no vTPM (TPM check bypassed)
 
 # ---- Install media ----
 # iso_paths[0]: the Windows Server 2025 install ISO, already staged on a
@@ -130,6 +132,9 @@ build_log_dir: 'C:\ProgramData\Omnissa\Logs'
 # build made with this off as representative, and re-enable it before
 # actually publishing anything built with it off.
 enable_windows_update: true
+windows_update_source: "windows_update"    # windows_update | wsus - normally chosen in the picker
+wsus_server_url: ""                         # e.g. http://wsus.example.com:8530 (real one in .local.yml)
+wsus_keep_policy: false                     # true = leave the WSUS setting in the image
 
 osot_generalize_manual_pause: false
 

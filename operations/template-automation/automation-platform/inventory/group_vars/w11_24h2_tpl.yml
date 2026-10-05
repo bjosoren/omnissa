@@ -13,6 +13,7 @@ vcenter_network: "CHANGEME-portgroup"
 vm_cpu_count: 2
 vm_cores_per_socket: 2
 vm_mem_size_mb: 8192
+vm_vgpu_profile: ""                         # "" = no vGPU; normally chosen in the placement picker
 vm_disk_size_mb: 81920                      # Windows 11 needs at least 64 GB
 vm_guest_os_type: "windows11_64Guest"
 vm_version: 20
@@ -51,6 +52,9 @@ winrm_port: 5985
 build_log_enabled: true
 build_log_dir: 'C:\ProgramData\Omnissa\Logs'
 enable_windows_update: true                 # needs internet or WSUS from the build network
+windows_update_source: "windows_update"    # windows_update | wsus - normally chosen in the picker
+wsus_server_url: ""                         # e.g. http://wsus.example.com:8530 (real one in .local.yml)
+wsus_keep_policy: false                     # true = leave the WSUS setting in the image
 # Manual pauses - each waits for `touch /tmp/w11_24h2_tpl_<marker>.go` from a
 # second shell on the control node and fails the build after 60 minutes.
 osot_generalize_manual_pause: false         # before Sysprep   (pre_generalize_pause)

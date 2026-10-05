@@ -78,6 +78,8 @@
         osot_optimize_report_name: "osot_optimize_report_pass2.log"
     - role: rds_role_install   # RDS-RD-Server role + .NET 4.x features, reboot, verify - repositioned, must run before horizon_agent
     - role: horizon_agent      # Horizon Agent install in RDSH mode, reboot, verify - user's step 10
+    - role: horizon_client     # Horizon Client for nested sessions (Log in as Current User)
+      when: install_horizon_client | default(false) | bool
     - role: dem                # Omnissa Dynamic Environment Manager, reboot, verify - user's step 11
     # GPU Drivers - Optional (user's step 12) - no role, see header above
     - role: appvolumes         # Omnissa App Volumes Agent, reboot, verify - user's step 13 - MOVED 2026-09-17 to run before OSOT Finalize part 1, per the user's explicit request; reverses the 2026-09-16 ordering, see this file's own header, "REORDERED 2026-09-17"
